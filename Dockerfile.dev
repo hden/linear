@@ -1,0 +1,39 @@
+FROM eclipse-temurin:26-jdk
+
+ARG BABASHKA_VERSION=1.13.219
+ARG TARGETARCH
+
+RUN apt-get update \
+ && apt-get install --yes --no-install-recommends curl nodejs npm rlwrap unzip \
+ && rm -rf /var/lib/apt/lists/* \
+ && curl --fail --location --silent --show-error \
+      --output /tmp/install-clojure.sh \
+      https://download.clojure.org/install/linux-install-1.12.5.1664.sh \
+ && chmod +x /tmp/install-clojure.sh \
+ && /tmp/install-clojure.sh \
+ && rm /tmp/install-clojure.sh \
+ && npm install --global @chrisoakman/standard-clojure-style@0.29.0 \
+ && case "$TARGETARCH" in amd64) bb_arch=amd64 ;; arm64) bb_arch=aarch64 ;; *) exit 1 ;; esac \
+ && curl --fail --location --silent --show-error \
+      --output /tmp/babashka.tar.gz \
+      "https://github.com/babashka/babashka/releases/download/v${BABASHKA_VERSION}/babashka-${BABASHKA_VERSION}-linux-${bb_arch}-static.tar.gz" \
+ && tar --extract --gzip --file /tmp/babashka.tar.gz --directory /usr/local/bin bb \
+ && rm /tmp/babashka.tar.gz
+
+WORKDIR /tmp/deps
+
+COPY deps.edn .
+
+RUN clojure -P \
+ && case "$TARGETARCH" in \
+      amd64) slatedb_platform=linux-x86-64 ;; \
+      arm64) slatedb_platform=linux-aarch64 ;; \
+      *) exit 1 ;; \
+    esac \
+ && slatedb_jar=$(find /root/.m2/repository/io/slatedb/slatedb-uniffi -name 'slatedb-uniffi-*.jar' -print -quit) \
+ && unzip -p "$slatedb_jar" "$slatedb_platform/libslatedb_uniffi.so" > /usr/local/lib/libslatedb_uniffi.so \
+ && ldconfig
+
+ENV JAVA_TOOL_OPTIONS="--enable-native-access=ALL-UNNAMED -Djava.library.path=/usr/local/lib"
+
+WORKDIR /workspace

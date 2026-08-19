@@ -1,0 +1,7 @@
+.git
+.lsp
+.nrepl-port
+.cpcache
+.clj-kondo
+logs
+target

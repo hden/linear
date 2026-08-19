@@ -1,0 +1,18 @@
+{:vars
+ {jdbc-url                 {:env "JDBC_DATABASE_URL"
+                            :default "jdbc:postgresql://localhost:5432/linear?user=postgres&password=postgres"}
+  slatedb-object-store-url {:env "SLATEDB_OBJECT_STORE_URL"
+                            :default "memory:///"}
+  slatedb-max-open-databases {:env "SLATEDB_MAX_OPEN_DATABASES"
+                              :default "128"}}
+ :system
+ {:duct.module/logging {}
+  :duct.module/sql {:migrations #duct/include "migrations.edn"}
+  :linear.adapter.objstore.impl/slatedb
+  {:object-store-url   #ig/var slatedb-object-store-url
+   :max-open-databases #ig/var slatedb-max-open-databases}
+  :duct.module/web
+  {:features #{:api}
+   :handler-opts
+   {:logger #ig/ref :duct/logger}
+   :routes []}}}

@@ -1,0 +1,14 @@
+/target
+/logs
+.cpcache
+.clj-kondo
+.nrepl-port
+.rebel_readline_history
+.vscode
+.calva
+.lsp/.cache
+.dir-locals.el
+
+docs/notes
+docs/superpowers
+libslatedb_uniffi.dylib

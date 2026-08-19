@@ -1,0 +1,144 @@
+[{:id   "001-init"
+  :up   ["CREATE TABLE transactions (
+            id              text        PRIMARY KEY,
+            idempotency_key text,
+            actor           text,
+            xid             bigint      NOT NULL DEFAULT txid_current(),
+            metadata        jsonb,
+            created_at      timestamptz NOT NULL DEFAULT now(),
+            CONSTRAINT transactions_id_prefix CHECK (id LIKE 'tx-%')
+          )"
+
+         "CREATE UNIQUE INDEX transactions_idempotency
+            ON transactions (idempotency_key) WHERE idempotency_key IS NOT NULL"
+
+         "CREATE TABLE vaults (
+            id               text        PRIMARY KEY,
+            owner            text,
+            ciphertext       bytea,
+            encrypted_by     text,
+            key_checksum     bytea       NOT NULL,
+            metadata         jsonb,
+            created_by       text        NOT NULL REFERENCES transactions (id),
+            created_at       timestamptz NOT NULL DEFAULT now(),
+            CONSTRAINT vaults_stored
+              CHECK ((ciphertext IS NULL) = (encrypted_by IS NULL)),
+            CONSTRAINT vaults_id_prefix CHECK (id LIKE 'v-%')
+          )"
+
+         "CREATE INDEX vaults_by_owner ON vaults (owner)"
+
+         "CREATE TABLE vault_handovers (
+            id           text        PRIMARY KEY,
+            vault_id     text        NOT NULL REFERENCES vaults (id),
+            ciphertext   bytea,
+            artifact     bytea,
+            created_by   text        NOT NULL REFERENCES transactions (id),
+            created_at   timestamptz NOT NULL DEFAULT now(),
+            CONSTRAINT vault_handovers_id_prefix CHECK (id LIKE 'h-%')
+          )"
+
+         "CREATE UNIQUE INDEX vault_handovers_holding
+            ON vault_handovers (vault_id) WHERE ciphertext IS NOT NULL"
+
+         "CREATE TABLE databases (
+            id                     text        PRIMARY KEY,
+            encrypted_by           text        NOT NULL REFERENCES vaults (id),
+            current_revision       text,
+            current_attributes     text,
+            created_at             timestamptz NOT NULL DEFAULT now(),
+            CONSTRAINT databases_id_prefix CHECK (id LIKE 'd-%')
+          )"
+
+         ;; "CREATE TABLE revisions (
+         ;;    id                  text        PRIMARY KEY,
+         ;;    database_id         text        NOT NULL,
+         ;;    parent              text        REFERENCES revisions (id),
+         ;;    layer_uri           text,
+         ;;    layer_page_count    bigint,
+         ;;    database_page_count bigint,
+         ;;    metadata            jsonb,
+         ;;    created_by          text        NOT NULL REFERENCES transactions (id),
+         ;;    created_at          timestamptz NOT NULL DEFAULT now(),
+         ;;    CONSTRAINT revisions_database
+         ;;      FOREIGN KEY (database_id) REFERENCES databases (id)
+         ;;      DEFERRABLE INITIALLY DEFERRED,
+         ;;    CONSTRAINT revisions_layer_page_count
+         ;;      CHECK ((layer_uri IS NULL) = (layer_page_count IS NULL)),
+         ;;    CONSTRAINT revisions_id_prefix CHECK (id LIKE 'r-%')
+         ;;  )"
+         ;; "ALTER TABLE databases
+         ;;    ADD CONSTRAINT databases_current_revision
+         ;;    FOREIGN KEY (current_revision) REFERENCES revisions (id)
+         ;;    DEFERRABLE INITIALLY DEFERRED"
+         "CREATE INDEX databases_by_vault ON databases (encrypted_by)"
+         ;; "CREATE INDEX revisions_by_database
+         ;;    ON revisions (database_id, created_at)"
+
+         "CREATE TABLE database_attributes (
+            id             text        PRIMARY KEY,
+            database_id    text        NOT NULL,
+            display_name   text,
+            metadata       jsonb,
+            created_by     text        NOT NULL REFERENCES transactions (id),
+            created_at     timestamptz NOT NULL DEFAULT now(),
+            CONSTRAINT database_attributes_database
+              FOREIGN KEY (database_id) REFERENCES databases (id)
+              DEFERRABLE INITIALLY DEFERRED,
+            CONSTRAINT database_attributes_id_prefix CHECK (id LIKE 'a-%')
+          )"
+         "ALTER TABLE databases
+            ADD CONSTRAINT databases_current_attributes
+            FOREIGN KEY (current_attributes) REFERENCES database_attributes (id)
+            DEFERRABLE INITIALLY DEFERRED"
+         "CREATE INDEX database_attributes_by_database
+            ON database_attributes (database_id, created_at)"
+         "CREATE INDEX database_attributes_by_transaction
+            ON database_attributes (created_by)"
+
+         "CREATE TABLE database_tombstones (
+            id             text        PRIMARY KEY,
+            database_id    text        NOT NULL REFERENCES databases (id),
+            metadata       jsonb,
+            created_by     text        NOT NULL REFERENCES transactions (id),
+            created_at     timestamptz NOT NULL DEFAULT now(),
+            CONSTRAINT database_tombstones_id_prefix CHECK (id LIKE 't-%')
+          )"
+         "CREATE INDEX database_tombstones_by_transaction
+            ON database_tombstones (created_by)"
+
+         "COMMENT ON TABLE transactions IS 'One row per mutation, and one per database transaction: the two are the same thing, as in Datomic. Every immutable row names the transaction that created it, which is also how what happened is known — a revision naming it was a push, a database and its attributes a creation, a tombstone a closure. The kind is therefore not a column: it would be a classification of ours stored next to the facts, drifting every time an operation is added or renamed.'"
+         "COMMENT ON COLUMN transactions.actor IS 'Who asked — a person or a service account, and toro does not ask which. Recorded so that why this row exists can be traced, and never consulted to decide whether a request may proceed.'"
+         "COMMENT ON COLUMN transactions.xid IS 'Which PostgreSQL transaction wrote this row, for checking against the server log. A debugging aid: never unique and never a key, because the counter behind it wraps around.'"
+         "COMMENT ON COLUMN transactions.metadata IS 'Small facts worth keeping for debugging. Never the request body: the idempotency key already tells whether an operation ran, and a body would put personal data in a table that outlives the operation.'"
+         "COMMENT ON COLUMN vaults.owner IS 'Who this vault belongs to, as an opaque external label: searched by and audited with, never interpreted and never unique. Several live vaults under one owner are legitimate, which is what gives an application shredding granularity finer than a whole customer without toro knowing why (ADR-0006).'"
+         "COMMENT ON COLUMN vaults.ciphertext IS 'The data encryption key of this vault, encrypted. The plaintext exists only in memory, while it is in use. Empty once the owner was handed their key and this copy was deleted, which is the one destruction in this schema — the row itself stays, so what it says about a vault that was given up is that its layers are unreadable rather than that it never existed.'"
+         "COMMENT ON COLUMN vaults.encrypted_by IS 'Which keychain encrypted the key in this row. Destroying that keychain makes every database of this vault permanently unreadable, which is what offboarding does. Unlike every other reference here it names something outside the database: it cannot be joined, and toro does not mint it. A deployment has to be able to tell which of these rows it can open at all rather than discovering it from a decryption failure, so this is compared before anything is decrypted — and it is a configured name rather than anything derived from the key, because a key service key keeps its name across rotations (ADR-0005).'"
+         "COMMENT ON COLUMN vaults.key_checksum IS 'A known canary encrypted under this key when it was made, so that whether this key still opens what it opened can be checked at any time — before the first layer is written under it, after the outer key is rotated, and as a readiness question. Kept because this design discards the plaintext it encrypts (ADR-0005).'"
+         "COMMENT ON COLUMN database_attributes.metadata IS 'Notes about the database for the people who operate it.'"
+         "COMMENT ON COLUMN database_tombstones.metadata IS 'Why it was closed, when that is worth keeping.'"
+         "COMMENT ON TABLE vaults IS 'A key toro holds, encrypted by another, and the unit management and transfer are done in (ADR-0006). Every row is one data encryption key, and nothing else is stored here: the deployment''s own keychain is a configured name rather than a row (see encrypted_by). Named for what a row is rather than for the role it plays, because which key encrypts data and which encrypts a key is decided by what was encrypted rather than by the key itself (ADR-0005).'"
+         "COMMENT ON TABLE vault_handovers IS 'One row per handover: this vault''s keychain was given to somebody, and the copy they can open lives here until it is spent. Appended by the seal and read by the acknowledgement, which refuses to destroy this deployment''s own copy until it finds the row. The row is the fact that a handover happened; the column beside it is what a restore needs and what the collection takes away.'"
+         "COMMENT ON COLUMN vault_handovers.ciphertext IS 'This vault''s keychain, encrypted under the key-encryption key minted for this handover — the second wrapped copy, beside the one on the vault row that this deployment opens (ADR-0020). Both exist from the seal until the acknowledgement, which is what makes a lost response and a retry cost nothing and what means no instant has nobody holding a working key. Empty once a restore spent it or the collection destroyed it, and those two empty the same column, so whichever commits second finds nothing to take and is told. When it is collected is the deployment''s window, measured from this row''s created_at (ADR-0020). What state a vault is in is this column and the one on the vault row, together: ready has that one, sealed has both, archived has this one, and a collected vault has neither.'"
+         "COMMENT ON COLUMN vault_handovers.artifact IS 'The key the owner was handed, wrapped under this deployment keychain, kept only so a retried seal returns the same key. Destroyed by the acknowledgement, together with the vault row copy: while both stand toro can still open the vault, and that is what Sealed is. Nothing constrains this to be present, which is what keeps an owner-supplied key possible (ADR-0006).'"
+         "COMMENT ON TABLE databases IS 'The atom: one row per database, and the only row whose values move rather than being appended — current_revision by compare-and-swap along a chain, current_attributes freely. Not the only row that ever changes, which this said for a long time: offboarding empties a vault (see vaults.ciphertext), and closing and offboarding both clear current_revision by matching on it still being set rather than on an expected revision. A client addresses this (/d/{id}).'"
+         "COMMENT ON COLUMN databases.encrypted_by IS 'Which vault the pages this database publishes are encrypted by, and therefore the only place its owner is recorded (ADR-0005). The same relation as `vaults.encrypted_by`, one level down: a database''s pages are encrypted by its vault, and that vault''s own bytes are encrypted by the deployment''s keychain. One word for one relation at both levels; the only difference is where the key lives, a row here against a name outside. Never empty: a keychain is required to publish a layer, and a database whose pages are unencrypted is a state this design deliberately does not represent, because no migration onto encryption is designed (ADR-0005).'"
+         "COMMENT ON COLUMN databases.current_revision IS 'The revision this database is at, moved only by compare-and-swap. NULL means closed, and closed reads as absent.'"
+         "COMMENT ON COLUMN databases.current_attributes IS 'The labelling this database is at. No client can observe it, and it never contends with a push.'"
+         ;; "COMMENT ON TABLE revisions IS 'One retained change of a database: immutable, chained by parent. Every push mints one, and clients name them as opaque cursors. Called revisions and not commits because commit is SQLite''s word here — a batch either commits or does not, which is a different fact.'"
+         ;; "COMMENT ON COLUMN revisions.parent IS 'The revision this one followed; for a copy''s first revision, the revision it was copied from.'"
+         ;; "COMMENT ON COLUMN revisions.layer_uri IS 'Where this revision''s layer is — the immutable object holding the pages it published, either the whole database or only what it changed. An address this deployment can resolve (file:// or gs://) rather than a name, so that rows written before a move to another store still resolve. Empty when a revision published nothing of its own: a copy''s first revision stands on the revision it was copied from, which is what makes copying free. Called a layer after the same thing in Neon and in container images: reading stacks them and the newest version of a page wins.'"
+         ;; "COMMENT ON COLUMN revisions.layer_page_count IS 'How many pages this revision''s layer holds. Empty exactly when there is no layer. Measured when the layer is written, never derived: what a read needs to know — whether the layer holds the whole database or only part of it — is this number against database_page_count, and a stored verdict on that question would freeze today''s policy into history.'"
+         ;; "COMMENT ON COLUMN revisions.database_page_count IS 'How large the database is at this revision, in pages — SQLite''s own PRAGMA page_count. Not the number of pages any one response or object carries; the wire calls this db_size.'"
+         ;; "COMMENT ON COLUMN revisions.metadata IS 'Anything worth keeping about how a push produced this revision, for debugging. Nothing reads it, and nothing writes it yet.'"
+         "COMMENT ON TABLE database_attributes IS 'What people call a database. Apart from revisions on purpose: a rename must not look like new content to a client.'"
+         "COMMENT ON TABLE database_tombstones IS 'One row per closed database. The fact is the row itself: this identity ended, at this time, in this transaction. Which revision it was pointing at is not recorded because it is derivable — the pointer always equals the tip of that database''s chain, since appending moves both in one transaction and rolls back when it loses the race.'"]
+  :down ["DROP TABLE vault_handovers"
+         "DROP TABLE database_tombstones"
+         "ALTER TABLE databases DROP CONSTRAINT databases_current_attributes"
+         "ALTER TABLE databases DROP CONSTRAINT databases_current_revision"
+         "DROP TABLE database_attributes"
+         ;; "DROP TABLE revisions"
+         "DROP TABLE databases"
+         "DROP TABLE vaults"
+         "DROP TABLE transactions"]}]

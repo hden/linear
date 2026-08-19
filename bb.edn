@@ -1,0 +1,24 @@
+{:tasks
+ {main {:doc "Runs the application"
+        :task (apply clojure "-M:duct" "--main" *command-line-args*)}
+  test {:doc "Runs the test suite"
+        :task (do
+                (shell "sh" "scripts/extract-slatedb-native.sh")
+                (shell "sh" "test/scripts/extract-slatedb-native-test.sh")
+                (apply clojure "-M:duct:test" "--test" *command-line-args*))}
+  lint {:doc "Runs clj-kondo"
+        :task (apply clojure "-M:lint" "--lint" "src" "test" *command-line-args*)}
+  check {:doc "Checks for reflection warnings"
+         :task (apply clojure "-M:check" *command-line-args*)}
+  format:check {:doc "Checks Standard Clojure Style formatting"
+                :task (apply shell "standard-clj" "check" "src" "test" *command-line-args*)}
+  format:fix {:doc "Formats Clojure and EDN files"
+              :task (apply shell "standard-clj" "fix" "src" "test" "deps.edn" "duct.edn" "bb.edn"
+                           *command-line-args*)}
+  coverage {:doc "Runs Cloverage and writes LCOV data"
+            :task (apply clojure "-M:cov" *command-line-args*)}
+  crap {:doc "Runs CRAP analysis"
+        :task (apply clojure "-M:crap" *command-line-args*)}
+  repl {:doc "Starts a REPL"
+        :override-builtin true
+        :task (clojure "-M:duct" "--repl" *command-line-args*)}}}

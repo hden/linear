@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"$(git rev-parse --show-toplevel)/.codex/hooks/stop-check.sh\"",
+            "timeout": 120,
+            "statusMessage": "Running Clojure stop checks"
+          }
+        ]
+      }
+    ]
+  }
+}
