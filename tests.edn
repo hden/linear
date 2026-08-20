@@ -1,0 +1,5 @@
+#kaocha/v1
+{:plugins [:kaocha.plugin/hooks]
+
+ :kaocha.hooks/post-load
+ [linear.kaocha/instrument]}

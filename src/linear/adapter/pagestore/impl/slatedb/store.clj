@@ -1,6 +1,6 @@
 (ns linear.adapter.pagestore.impl.slatedb.store
   (:require
-   [linear.adapter.pagestore.core :as pagestore]
+   [linear.adapter.pagestore.impl.core :as core]
    [linear.adapter.pagestore.impl.slatedb.codec :as codec]
    [promesa.core :as promesa])
   (:import
@@ -69,7 +69,7 @@
              page-ids))
       (partial into {})))
 
-  pagestore/Database
+  core/Database
   (-size [this]
     (await!
       (promesa/then (as-of-revision-id this revision-id)

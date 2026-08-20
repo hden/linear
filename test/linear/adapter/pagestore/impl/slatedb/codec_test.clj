@@ -3,19 +3,13 @@
    [boring.core :as cbor]
    [clojure.test :refer [deftest is]]
    [cognitect.anomalies :as anomaly]
-   [linear.adapter.pagestore.core :as pagestore]
+   [linear.adapter.pagestore.impl.core :as core]
    [linear.adapter.pagestore.impl.slatedb.codec :as codec]
    [linear.adapter.pagestore.impl.slatedb.fixture :as fixture]
+   [linear.test :refer [catch-ex-data]]
    [taoensso.tempel :as tempel])
   (:import
    (java.security MessageDigest)))
-
-(defn- read-error [f]
-  (try
-    (f)
-    nil
-    (catch clojure.lang.ExceptionInfo error
-      error)))
 
 (defn- encrypted-page [keychain record-key page]
   (tempel/encrypt-with-symmetric-key
@@ -33,9 +27,9 @@
     (fixture/with-database
       snapshot
       (fn [database]
-        (let [error (read-error #(pagestore/fetch-pages-by-ids database {:ids #{"target"}}))]
-          (is (= ::anomaly/fault (-> error ex-data ::anomaly/category)))
-          (is (= ::codec/unreadable-record (-> error ex-data :reason))))))))
+        (let [error (catch-ex-data #(core/fetch-pages-by-ids database {:ids #{"target"}}))]
+          (is (= ::anomaly/fault (::anomaly/category error)))
+          (is (= ::codec/unreadable-record (:reason error))))))))
 
 (deftest unreadable-page-values-are-reported-as-anomalies
   (let [writer-keychain (tempel/keychain)
@@ -45,6 +39,6 @@
     (fixture/with-database
       snapshot
       (fn [database]
-        (let [error (read-error #(pagestore/fetch-pages-by-ids database {:ids #{"target"}}))]
-          (is (= ::anomaly/fault (-> error ex-data ::anomaly/category)))
-          (is (= ::codec/unreadable-record (-> error ex-data :reason))))))))
+        (let [error (catch-ex-data #(core/fetch-pages-by-ids database {:ids #{"target"}}))]
+          (is (= ::anomaly/fault (::anomaly/category error)))
+          (is (= ::codec/unreadable-record (:reason error))))))))

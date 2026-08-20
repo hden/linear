@@ -67,11 +67,11 @@
         (finally
           (.returnObject database-pool database-id database))))))
 
-(defmethod integrant/init-key :linear.adapter.objstore.impl/slatedb [_ options]
+(defmethod integrant/init-key :linear.adapter.pagestore.impl.slatedb/connection [_ options]
   (let [object-store (ObjectStore/resolve (:object-store-url options))]
     (->SlateDbConnection (database-pool object-store options) object-store)))
 
-(defmethod integrant/halt-key! :linear.adapter.objstore.impl/slatedb [_ connection]
+(defmethod integrant/halt-key! :linear.adapter.pagestore.impl.slatedb/connection [_ connection]
   (try
     (.close ^GenericKeyedObjectPool (:database-pool connection))
     (finally

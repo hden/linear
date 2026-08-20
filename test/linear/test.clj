@@ -46,3 +46,9 @@
   ([options]
    (duct-test/run (update options :config
                           #(resolve-migrations (or % {}))))))
+
+(defn catch-ex-data [f]
+  (try
+    (f)
+    (catch clojure.lang.ExceptionInfo ex
+      (ex-data ex))))
