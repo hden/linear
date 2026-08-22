@@ -70,6 +70,8 @@
       (partial into {})))
 
   core/Database
+  (-revision-id [this]
+    (await! (as-of-revision-id this revision-id)))
   (-size [this]
     (await!
       (promesa/then (as-of-revision-id this revision-id)

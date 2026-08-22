@@ -5,13 +5,21 @@
                             :default "memory:///"}
   slatedb-max-open-databases {:env "SLATEDB_MAX_OPEN_DATABASES"
                               :type :int
-                              :default 128}}
+                              :default 128}
+  sqlite-library           {:env "SQLITE_LIBRARY"}
+  sqlite-vfs-name          {:env "SQLITE_VFS_NAME"
+                            :default "linear-sqlite"}}
  :system
  {:duct.module/logging {}
   :duct.module/sql {:migrations #duct/include "migrations.edn"}
   :linear.adapter.pagestore.impl.slatedb/connection
   {:object-store-url   #ig/var slatedb-object-store-url
    :max-open-databases #ig/var slatedb-max-open-databases}
+  :linear.adapter.pagestore.impl.sqlite/vfs
+  {:library #ig/var sqlite-library
+   :name    #ig/var sqlite-vfs-name}
+  :linear.adapter.pagestore.impl.sqlite/transactor
+  {:vfs #ig/ref :linear.adapter.pagestore.impl.sqlite/vfs}
   :duct.module/web
   {:features #{:api}
    :handler-opts

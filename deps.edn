@@ -20,7 +20,9 @@
         com.github.hden/labrador            {:mvn/version "0.2.0"}
         metosin/malli                       {:mvn/version "0.20.1"}}
  :aliases
- {:duct {:jvm-opts ["--enable-native-access=ALL-UNNAMED"]
+ {:test {:extra-paths ["test"]
+         :extra-deps {org.xerial/sqlite-jdbc {:mvn/version "3.53.0.0"}}}
+  :duct {:jvm-opts ["--enable-native-access=ALL-UNNAMED"]
          :main-opts ["-m" "duct.main"]}
   :lint {:replace-deps {clj-kondo/clj-kondo {:mvn/version "2026.08.04"}}
          :main-opts ["-m" "clj-kondo.main"]}
@@ -29,7 +31,9 @@
                         :git/sha "0ca84df"}}
           :main-opts ["-m" "clj-check.check" "src"]}
   :cov  {:extra-paths ["test"]
-         :extra-deps {cloverage/cloverage {:mvn/version "1.2.4"}}
+         :extra-deps {cloverage/cloverage       {:mvn/version "1.2.4"}
+                      org.xerial/sqlite-jdbc     {:mvn/version "3.53.0.0"}}
+         :jvm-opts ["--enable-native-access=ALL-UNNAMED"]
          :main-opts ["-m" "cloverage.coverage"
                      "-p" "src"
                      "-s" "test"

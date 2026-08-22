@@ -5,7 +5,8 @@
         :task (do
                 (shell "sh" "scripts/extract-slatedb-native.sh")
                 (shell "sh" "test/scripts/extract-slatedb-native-test.sh")
-                (apply clojure "-M:duct:test" "--test" *command-line-args*))}
+                (apply shell "sh" "scripts/test-sqlite.sh" "-M:duct:test" "--test"
+                       *command-line-args*))}
   lint {:doc "Runs clj-kondo"
         :task (apply clojure "-M:lint" "--lint" "src" "test" *command-line-args*)}
   check {:doc "Checks for reflection warnings"
@@ -16,9 +17,15 @@
               :task (apply shell "standard-clj" "fix" "src" "test" "deps.edn" "duct.edn" "bb.edn"
                            *command-line-args*)}
   coverage {:doc "Runs Cloverage and writes LCOV data"
-            :task (apply clojure "-M:cov" *command-line-args*)}
+            :task (do
+                    (shell "sh" "scripts/extract-slatedb-native.sh")
+                    (shell "sh" "test/scripts/extract-slatedb-native-test.sh")
+                    (apply shell "sh" "scripts/test-sqlite.sh" "-M:cov" *command-line-args*))}
   crap {:doc "Runs CRAP analysis"
-        :task (apply clojure "-M:crap" *command-line-args*)}
+        :task (do
+                (shell "sh" "scripts/extract-slatedb-native.sh")
+                (shell "sh" "test/scripts/extract-slatedb-native-test.sh")
+                (apply shell "sh" "scripts/test-sqlite.sh" "-M:crap" *command-line-args*))}
   repl {:doc "Starts a REPL"
         :override-builtin true
         :task (clojure "-M:duct" "--repl" *command-line-args*)}}}

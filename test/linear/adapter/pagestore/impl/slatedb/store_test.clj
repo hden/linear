@@ -15,6 +15,7 @@
                   "r3" (byte-array [3])}
              "2" {"r1" (byte-array [9])}}}
     (fn [database]
+      (is (= "r2" (core/revision-id database)))
       (is (= 2 (core/size database)))
       (let [pages (core/fetch-pages-by-ids database {:ids #{"1" "2" "3"}})]
         (is (java.util.Arrays/equals (byte-array [2]) (get pages "1")))

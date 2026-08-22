@@ -1,7 +1,7 @@
 (ns linear.adapter.pagestore.impl.slatedb.connection
   (:require
    [integrant.core :as integrant]
-   [linear.adapter.pagestore.core :as pagestore]
+   [linear.adapter.pagestore.impl.core :as core]
    [linear.adapter.pagestore.impl.slatedb.store :as store])
   (:import
    (io.slatedb.uniffi Admin AdminBuilder CloneBuilder CloneSourceSpec Db DbBuilder DbTransaction FlushOptions FlushType IsolationLevel ObjectStore)
@@ -33,7 +33,7 @@
     (GenericKeyedObjectPool. (database-pool-factory object-store) pool-config)))
 
 (defrecord SlateDbConnection [^GenericKeyedObjectPool database-pool ^ObjectStore object-store]
-  pagestore/Connection
+  core/Connection
   (-create-db! [_ {:keys [db from]}]
     (if from
       (let [^String source from
