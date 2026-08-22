@@ -1,8 +1,7 @@
 (ns linear.adapter.pagestore.core
   "Public APIs"
   (:require
-   [linear.adapter.pagestore.impl.core :as impl]
-   [linear.spec :refer [spec-for]]))
+   [linear.adapter.pagestore.impl.core :as impl]))
 
 (defn create-db!
   {:malli/schema [:-> ::connection

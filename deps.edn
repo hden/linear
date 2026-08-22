@@ -21,7 +21,7 @@
         metosin/malli                       {:mvn/version "0.20.1"}}
  :aliases
  {:test {:extra-paths ["test"]
-         :extra-deps {org.xerial/sqlite-jdbc {:mvn/version "3.53.0.0"}}}
+         :extra-deps {ring/ring-mock {:mvn/version "0.6.2"}}}
   :duct {:jvm-opts ["--enable-native-access=ALL-UNNAMED"]
          :main-opts ["-m" "duct.main"]}
   :lint {:replace-deps {clj-kondo/clj-kondo {:mvn/version "2026.08.04"}}

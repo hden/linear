@@ -44,8 +44,11 @@
   - `:vars`     - bind vars to this map of symbols to values"
   ([] (run {}))
   ([options]
-   (duct-test/run (update options :config
-                          #(resolve-migrations (or % {}))))))
+   (let [config   (or (:config options) (load-config))
+         profiles (or (:profiles options) [:test :main])]
+     (duct-test/run (assoc options
+                           :config   (resolve-migrations config)
+                           :profiles profiles)))))
 
 (defn catch-ex-data [f]
   (try

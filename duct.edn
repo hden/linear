@@ -11,17 +11,13 @@
                             :default "linear-sqlite"}}
  :system
  {:duct.module/logging {}
-  :duct.module/sql {:migrations #duct/include "migrations.edn"}
-  :linear.adapter.pagestore.impl.slatedb/connection
-  {:object-store-url   #ig/var slatedb-object-store-url
-   :max-open-databases #ig/var slatedb-max-open-databases}
-  :linear.adapter.pagestore.impl.sqlite/vfs
-  {:library #ig/var sqlite-library
-   :name    #ig/var sqlite-vfs-name}
-  :linear.adapter.pagestore.impl.sqlite/transactor
-  {:vfs #ig/ref :linear.adapter.pagestore.impl.sqlite/vfs}
+
+  :duct.module/sql
+  {:migrations #duct/include "migrations.edn"}
+
   :duct.module/web
   {:features #{:api}
    :handler-opts
    {:logger #ig/ref :duct/logger}
-   :routes []}}}
+   :routes
+   [["/health/ready" {:get :linear.handler.health/ready}]]}}}
