@@ -10,7 +10,11 @@
   sqlite-vfs-name          {:env "SQLITE_VFS_NAME"
                             :default "linear-sqlite"}}
  :system
- {:duct.module/logging {}
+ {:linear.adapter.sqlite.evaluator/evaluator
+  {:library #ig/var sqlite-library
+   :name    #ig/var sqlite-vfs-name}
+
+  :duct.module/logging {}
 
   :duct.module/sql
   {:migrations #duct/include "migrations.edn"}
@@ -18,6 +22,9 @@
   :duct.module/web
   {:features #{:api}
    :handler-opts
-   {:logger #ig/ref :duct/logger}
+   {:logger                                  #ig/ref :duct/logger
+    :linear.usecase.core/postgres-datasource #ig/ref :duct.database.sql/hikaricp
+    :linear.usecase.core/sqlite-evaluator    #ig/ref :linear.adapter.sqlite.evaluator/evaluator}
    :routes
-   [["/health/ready" {:get :linear.handler.health/ready}]]}}}
+   [["/health/ready" {:get :linear.handler.health/ready}]
+    ["/health/ok" {:get :linear.handler.health/ok}]]}}}

@@ -1,5 +1,6 @@
 (ns linear.adapter.postgres.core
   (:require
+   [clj-ulid :refer [ulid]]
    [clojure.string :as string]
    [cognitect.anomalies :as anomaly]
    [diehard.core :refer [with-retry with-timeout]]
@@ -7,8 +8,7 @@
    [linear.spec :refer [spec-for]]
    [next.jdbc :as jdbc]
    [next.jdbc.date-time :as date-time]
-   [next.jdbc.result-set :as result-set]
-   [clj-ulid :refer [ulid]])
+   [next.jdbc.result-set :as result-set])
   (:import
    (javax.sql DataSource)))
 

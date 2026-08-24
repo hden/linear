@@ -1,11 +1,24 @@
 (ns linear.usecase.healthcheck
   (:require
-   [linear.adapter.postgres.controllable :as controllable]
+   [linear.protocol :as protocol]
    [linear.usecase.core :as core]))
+
+(defn- every-check? [context check]
+  (try
+    (let [checkables (core/checkables context)]
+      (and (seq checkables)
+           (every? check checkables)))
+    (catch Exception _
+      false)))
 
 (defn ready?
   {:malli/schema [:-> ::core/context
                       :boolean]}
   [context]
-  (let [ctrl (core/controllable context)]
-    (controllable/ready? ctrl)))
+  (every-check? context protocol/ready?))
+
+(defn ok?
+  {:malli/schema [:-> ::core/context
+                      :boolean]}
+  [context]
+  (every-check? context protocol/ok?))
