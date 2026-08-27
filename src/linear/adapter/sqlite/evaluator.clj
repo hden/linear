@@ -9,30 +9,27 @@
    [linear.adapter.sqlite.evaluation :as evaluation]
    [linear.adapter.sqlite.vfs :as vfs]
    [linear.protocol :as protocol]
-   [linear.spec :refer [spec-for]])
+   [linear.spec :refer [spec-for]]
+   [linear.usecase.database :as database])
   (:import
    (dev.failsafe TimeoutExceededException)))
 
 (def ^:private ^:const default-shutdown-timeout-ms 10000)
 
 (defmethod spec-for ::evaluator [_]
-  [:fn #(satisfies? protocol/Evaluator %)])
+  [:fn #(satisfies? database/Evaluator %)])
 
 (defn- call-sqlite [invocation context f]
   (try
     (let [result (f)]
       (vfs/throw-if-failed! invocation)
       result)
-    (catch VirtualMachineError throwable
-      (throw throwable))
-    (catch Throwable throwable
+    (catch Exception error
       (try
         (vfs/throw-if-failed! invocation)
-        (catch VirtualMachineError callback-failure
-          (throw callback-failure))
-        (catch Throwable callback-failure
+        (catch Exception callback-failure
           (fault "SQLite execution failed" context callback-failure)))
-      (fault "SQLite execution failed" context throwable))))
+      (fault "SQLite execution failed" context error))))
 
 (defn- execute! [invocation database context sql]
   (call-sqlite invocation context #(connection/execute database sql)))
@@ -46,8 +43,26 @@
 
 (defn- revision [snapshot delta]
   (assoc delta
-         :revision-id (ulid)
-         :parent (protocol/revision-id snapshot)))
+         :revision-id (str "r-" (ulid))
+         :parent (database/revision-id snapshot)))
+
+(defn- execute-command! [invocation sqlite-database command]
+  (execute! invocation sqlite-database {:operation :begin} "BEGIN IMMEDIATE")
+  (let [outcome (try
+                  (doseq [statement (:statements command)]
+                    (call-sqlite invocation
+                                 {:operation :execute}
+                                 #(connection/execute-statement sqlite-database statement)))
+                  (execute! invocation sqlite-database {:operation :commit} "COMMIT")
+                  {:value nil}
+                  (catch Exception error
+                    {:error error}))]
+    (when-let [error (:error outcome)]
+      (try
+        (execute! invocation sqlite-database {:operation :rollback} "ROLLBACK")
+        (catch Exception rollback-error
+          (.addSuppressed ^Exception error rollback-error)))
+      (throw error))))
 
 (defn- begin-evaluation! [state]
   (swap! state
@@ -77,8 +92,8 @@
   (-ok? [_]
     (and (= :ok (:liveness @state))
          (vfs/ok? resources)))
-  protocol/Evaluator
-  (-eval [_ {:keys [snapshot operation]}]
+  database/Evaluator
+  (-evaluate [_ {:keys [snapshot command]}]
     (begin-evaluation! state)
     (try
       (let [path       (str "/linear/" (ulid) ".db")
@@ -91,9 +106,7 @@
                                                          :vfs-name (:name resources)}))]
             (try
               (configure! invocation database)
-              (execute! invocation database {:operation :begin} "BEGIN IMMEDIATE")
-              (operation #(execute! invocation database {:operation :execute} %))
-              (execute! invocation database {:operation :commit} "COMMIT")
+              (execute-command! invocation database command)
               (revision snapshot (evaluation/commit filesystem))
               (finally
                 (call-sqlite invocation
@@ -102,12 +115,7 @@
           (finally
             (vfs/unmount invocation))))
       (finally
-        (end-evaluation! state))))
-  (-vacuum [this {:keys [snapshot]}]
-    (protocol/-eval this
-                    {:snapshot snapshot
-                     :operation (fn [execute]
-                                  (execute "PRAGMA incremental_vacuum"))})))
+        (end-evaluation! state)))))
 
 (alter-meta! #'->Evaluator assoc :private true)
 (alter-meta! #'map->Evaluator assoc :private true)

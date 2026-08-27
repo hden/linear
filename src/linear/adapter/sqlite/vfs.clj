@@ -189,10 +189,10 @@
     (-> completion
         (p/timeout callback-timeout-ms)
         (p/catch TimeoutException
-                 (fn [throwable]
+                 (fn [error]
                    (record-callback-failure! resources nil
                                              (assoc context :callback-id callback-id)
-                                             throwable))))
+                                             error))))
     completion))
 
 (defn- guarded-callback [resources invocation context f]
@@ -201,8 +201,8 @@
     (swap! (:state resources) assoc-in [:callbacks callback-id] context)
     (try
       (f)
-      (catch Throwable throwable
-        (record-callback-failure! resources invocation context throwable)
+      (catch Exception error
+        (record-callback-failure! resources invocation context error)
         ffi/sqlite-ioerr)
       (finally
         (swap! (:state resources) update :callbacks dissoc callback-id)
@@ -219,8 +219,8 @@
                           (:invocation route)
                           context
                           #(apply implementation file-key arguments)))
-      (catch Throwable throwable
-        (record-callback-failure! resources nil {:operation operation} throwable)
+      (catch Exception error
+        (record-callback-failure! resources nil {:operation operation} error)
         ffi/sqlite-ioerr))))
 
 (defn- file-route [resources file-key]
@@ -516,9 +516,9 @@
           (fault "SQLite VFS registration failed"
                  {:reason ::vfs-registration-failed
                   :code   result})))
-      (catch Throwable throwable
+      (catch Exception error
         (.close arena)
-        (throw throwable)))))
+        (throw error)))))
 
 (defn- mounted-paths [path]
   [path (str path "-wal") (str path "-shm")])

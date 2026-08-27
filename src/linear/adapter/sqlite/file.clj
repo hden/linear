@@ -1,26 +1,15 @@
 (ns linear.adapter.sqlite.file
   (:require
-   [cognitect.anomalies :as anomaly]
    [linear.adapter.sqlite.core :refer [fault]]
    [linear.adapter.sqlite.protocol :as sqlite]
-   [linear.protocol :as protocol]))
-
-(defn- page-id [page-number]
-  (when-not (pos-int? page-number)
-    (throw (ex-info "SQLite page number must be positive"
-                    {::anomaly/category ::anomaly/incorrect
-                     :reason            ::invalid-page-number
-                     :page-number       page-number})))
-  (str page-number))
+   [linear.usecase.database :as database]))
 
 (defn- fetch-pages [snapshot page-numbers]
   (let [page-numbers (set page-numbers)
-        pages        (protocol/-fetch-pages-by-ids
-                       snapshot
-                       {:ids (into #{} (map page-id) page-numbers)})]
+        pages        (database/fetch-pages-by-ids snapshot {:ids page-numbers})]
     (into {}
           (map (fn [page-number]
-                 [page-number (get pages (page-id page-number))]))
+                 [page-number (get pages page-number)]))
           page-numbers)))
 
 (defn- page-size [snapshot]
@@ -85,7 +74,7 @@
     file-size))
 
 (defn snapshot-file
-  {:malli/schema [:-> ::protocol/snapshot ::sqlite/file]}
+  {:malli/schema [:-> ::database/snapshot ::sqlite/file]}
   [snapshot]
   (let [page-size (page-size snapshot)]
-    (->SnapshotFile snapshot page-size (* (protocol/-size snapshot) page-size))))
+    (->SnapshotFile snapshot page-size (* (database/size snapshot) page-size))))

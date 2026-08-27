@@ -2,119 +2,153 @@
   (:require
    [clojure.test :refer [deftest is]]
    [integrant.core :as integrant]
-   [linear.adapter.sqlite.connection :as connection]
-   [linear.adapter.sqlite.evaluation :as evaluation]
    [linear.adapter.sqlite.evaluator]
-   [linear.adapter.sqlite.vfs :as vfs]
-   [linear.protocol :as protocol]))
+   [linear.adapter.sqlite.test-support :as support]
+   [linear.usecase.database :as database]))
 
-(defrecord Snapshot []
-  protocol/Snapshot
-  (-revision-id [_] "r0")
-  (-size [_] 0)
-  (-fetch-pages-by-ids [_ _] {}))
+(defrecord FailingSnapshot [snapshot fetch-count failure]
+  database/Snapshot
+  (-revision-id [_]
+    (database/revision-id snapshot))
+  (-size [_]
+    (database/size snapshot))
+  (-fetch-pages-by-ids [_ arg-map]
+    (if (= 1 (swap! fetch-count inc))
+      (database/fetch-pages-by-ids snapshot arg-map)
+      (throw failure))))
 
-(deftest integrant-is-the-public-evaluator-construction-boundary
-  (let [publics (ns-publics 'linear.adapter.sqlite.evaluator)
-        events  (atom [])]
-    (with-redefs [vfs/install (fn [options]
-                                (swap! events conj [:install options])
-                                ::resources)
-                  vfs/uninstall (fn [resources]
-                                  (swap! events conj [:uninstall resources])
-                                  nil)
-                  vfs/drain! (fn [resources]
-                               (swap! events conj [:drain resources])
-                               nil)]
-      (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator
-                                          {:library "test"})]
-        (is (not (contains? publics '->Evaluator)))
-        (is (not (contains? publics 'map->Evaluator)))
-        (is (satisfies? protocol/Evaluator evaluator))
-        (is (protocol/ready? evaluator))
-        (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator)
-        (is (false? (protocol/ready? evaluator)))
-        (is (= [[:install {:library "test" :name "linear-sqlite"}]
-                [:drain ::resources]
-                [:uninstall ::resources]]
-               @events))))))
+(defn- caused-by? [error cause]
+  (loop [current error]
+    (cond
+      (nil? current) false
+      (identical? current cause) true
+      :else (recur (ex-cause current)))))
 
-(deftest evaluation-orchestrates-sqlite-and-cleans-up-in-order
-  (let [events (atom [])]
-    (with-redefs [vfs/install (fn [_] {:name "test-vfs"})
-                  vfs/mount (fn [_ request]
-                              (swap! events conj [:vfs-mount request])
-                              ::invocation)
-                  vfs/throw-if-failed! (fn [_] nil)
-                  vfs/unmount (fn [_]
-                                (swap! events conj [:vfs-unmount])
-                                nil)
-                  connection/open (fn [options]
-                                    (swap! events conj [:connection-open options])
-                                    ::connection)
-                  connection/execute (fn [_ sql]
-                                       (swap! events conj [:execute sql])
-                                       nil)
-                  connection/close (fn [_]
-                                     (swap! events conj [:connection-close])
-                                     nil)
-                  evaluation/evaluation (fn [_ path]
-                                          (swap! events conj [:evaluation path])
-                                          ::filesystem)
-                  evaluation/commit (fn [_]
-                                      (swap! events conj [:delta])
-                                      {:database-page-count 1})]
-      (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator
-                                          {:library "test" :name "test-vfs"})
-            result    (protocol/evaluate evaluator
-                                         {:snapshot (->Snapshot)
-                                          :operation (fn [execute]
-                                                       (execute "UPDATE example"))})
-            path      (second (first @events))]
-        (is (= "r0" (:parent result)))
-        (is (= [[:evaluation path]
-                [:vfs-mount {:path path :filesystem ::filesystem}]
-                [:connection-open {:path path :vfs-name "test-vfs"}]
-                [:execute "PRAGMA locking_mode=EXCLUSIVE"]
-                [:execute "PRAGMA wal_autocheckpoint=0"]
-                [:execute "PRAGMA temp_store=MEMORY"]
-                [:execute "PRAGMA synchronous=FULL"]
-                [:execute "BEGIN IMMEDIATE"]
-                [:execute "UPDATE example"]
-                [:execute "COMMIT"]
-                [:delta]
-                [:connection-close]
-                [:vfs-unmount]]
-               @events))))))
+(deftest evaluates-sql-through-the-native-evaluator
+  (when-let [library (System/getenv "SQLITE_LIBRARY")]
+    (Class/forName "org.sqlite.JDBC")
+    (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator {:library library})]
+      (try
+        (let [result (database/evaluate
+                       evaluator
+                       {:snapshot (support/snapshot (support/sqlite-image))
+                        :command {:statements
+                                  [{:sql "UPDATE t SET value = ? WHERE id = ?"
+                                    :parameters ["through-evaluator" 1]}]}})]
+          (is (= "r-0" (:parent result)))
+          (is (pos? (:database-page-count result)))
+          (is (seq (:pages result))))
+        (finally
+          (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator))))))
 
-(deftest callback-failure-wins-when-the-native-call-also-throws
-  (let [callback-cause (ex-info "callback failed" {:reason ::callback-failed})
-        failure (try
-                  (with-redefs [vfs/throw-if-failed! (fn [_]
-                                                       (throw callback-cause))]
-                    (#'linear.adapter.sqlite.evaluator/call-sqlite
-                      ::invocation
-                      {:operation :execute}
-                      #(throw (ex-info "native failed" {}))))
-                  nil
-                  (catch clojure.lang.ExceptionInfo exception
-                    exception))]
-    (is (identical? callback-cause (.getCause failure)))))
+(deftest computes-independent-revisions-from-the-same-snapshot
+  (when-let [library (System/getenv "SQLITE_LIBRARY")]
+    (Class/forName "org.sqlite.JDBC")
+    (let [base (support/snapshot (support/sqlite-image))
+          evaluator  (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator {:library library})]
+      (try
+        (let [evaluate-async (fn [value]
+                               (future
+                                 (database/evaluate
+                                   evaluator
+                                   {:snapshot base
+                                    :command {:statements
+                                              [{:sql "UPDATE t SET value = ? WHERE id = 1"
+                                                :parameters [value]}]}})))
+              left           (evaluate-async "left")
+              right          (evaluate-async "right")]
+          (is (= "r-0" (:parent @left)))
+          (is (= "r-0" (:parent @right)))
+          (is (not= (:revision-id @left) (:revision-id @right))))
+        (finally
+          (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator))))))
 
-(deftest shutdown-timeout-abandons-the-installed-vfs
-  (let [events (atom [])]
-    (with-redefs [vfs/install (fn [_] ::resources)
-                  vfs/drain! (fn [_]
-                               (swap! events conj :drain)
-                               nil)
-                  vfs/uninstall (fn [_]
-                                  (swap! events conj :uninstall)
-                                  nil)
-                  vfs/ok? (fn [_] true)]
-      (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator
-                                          {:library "test" :shutdown-timeout-ms 1})]
-        (swap! (:state evaluator) assoc :active 1)
-        (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator)
-        (is (= :abandoned (:status @(:state evaluator))))
-        (is (false? (protocol/ok? evaluator)))
-        (is (empty? @events))))))
+(deftest binds-all-domain-scalar-types
+  (when-let [library (System/getenv "SQLITE_LIBRARY")]
+    (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator
+                                        {:library library})]
+      (try
+        (let [result (database/evaluate
+                       evaluator
+                       {:snapshot (support/snapshot (support/sqlite-image))
+                        :command
+                        {:statements
+                         [{:sql "UPDATE t SET value = ? WHERE id = ?"
+                           :parameters ["bound" 1]}
+                          {:sql (str "SELECT CASE WHEN ? IS NULL "
+                                  "AND typeof(?) = 'integer' AND ? = 42 "
+                                  "AND typeof(?) = 'real' AND ? = 1.5 "
+                                  "AND typeof(?) = 'text' AND ? = 'text' "
+                                  "AND typeof(?) = 'blob' AND ? = x'0102' "
+                                  "THEN 1 ELSE abs(-9223372036854775808) END")
+                           :parameters [nil
+                                        42 42
+                                        1.5 1.5
+                                        "text" "text"
+                                        (byte-array [1 2]) (byte-array [1 2])]}]}})]
+          (is (= "r-0" (:parent result))))
+        (finally
+          (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator))))))
+
+(deftest rejects-multiple-statements-and-transaction-control
+  (when-let [library (System/getenv "SQLITE_LIBRARY")]
+    (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator
+                                        {:library library})
+          base      (support/snapshot (support/sqlite-image))]
+      (try
+        (doseq [sql ["UPDATE t SET value = 'one'; UPDATE t SET value = 'two'"
+                     "COMMIT"]]
+          (is (thrown? clojure.lang.ExceptionInfo
+                       (database/evaluate evaluator
+                                          {:snapshot base
+                                           :command {:statements [{:sql sql
+                                                                   :parameters []}]}}))))
+        (finally
+          (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator))))))
+
+(deftest evaluator-recovers-after-a-statement-failure
+  (when-let [library (System/getenv "SQLITE_LIBRARY")]
+    (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator
+                                        {:library library})
+          base      (support/snapshot (support/sqlite-image))]
+      (try
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (database/evaluate evaluator
+                                        {:snapshot base
+                                         :command {:statements
+                                                   [{:sql "UPDATE missing_table SET value = 1"
+                                                     :parameters []}]}})))
+        (let [result (database/evaluate evaluator
+                                        {:snapshot base
+                                         :command {:statements
+                                                   [{:sql "UPDATE t SET value = ? WHERE id = 1"
+                                                     :parameters ["after-failure"]}]}})]
+          (is (= "r-0" (:parent result)))
+          (is (seq (:pages result))))
+        (finally
+          (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator))))))
+
+(deftest evaluator-recovers-after-a-snapshot-callback-failure
+  (when-let [library (System/getenv "SQLITE_LIBRARY")]
+    (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator
+                                        {:library library})
+          base      (support/snapshot (support/sqlite-image))
+          cause     (ex-info "snapshot read failed" {:reason ::snapshot-read-failed})
+          failing   (->FailingSnapshot base (atom 0) cause)]
+      (try
+        (let [failure (try
+                        (database/evaluate evaluator
+                                           {:snapshot failing
+                                            :command {:statements []}})
+                        nil
+                        (catch Exception error
+                          error))]
+          (is (caused-by? failure cause)))
+        (let [result (database/evaluate evaluator
+                                        {:snapshot base
+                                         :command {:statements
+                                                   [{:sql "UPDATE t SET value = ? WHERE id = 1"
+                                                     :parameters ["after-callback-failure"]}]}})]
+          (is (= "r-0" (:parent result))))
+        (finally
+          (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator))))))

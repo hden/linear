@@ -10,6 +10,8 @@
    (java.lang.invoke MethodHandle)))
 
 (def ^:const sqlite-ok 0)
+(def ^:const sqlite-row 100)
+(def ^:const sqlite-done 101)
 (def ^:const sqlite-ioerr 10)
 (def ^:const sqlite-ioerr-short-read 522)
 (def ^:const sqlite-readonly 8)
@@ -18,6 +20,9 @@
 (def ^:const sqlite-deny 1)
 (def ^:const sqlite-attach 24)
 (def ^:const sqlite-detach 25)
+(def ^:const sqlite-transaction 22)
+(def ^:const sqlite-savepoint 32)
+(def ^:const sqlite-utf8 1)
 (def ^:const sqlite-open-readonly 0x00000001)
 (def ^:const sqlite-open-readwrite 0x00000002)
 (def ^:const sqlite-open-create 0x00000004)
@@ -87,6 +92,29 @@
      :exec                  (coffi/cfn "sqlite3_exec"
                               [pointer ::mem/c-string pointer pointer pointer]
                               ::mem/int)
+     :prepare-v3            (coffi/cfn "sqlite3_prepare_v3"
+                              [pointer pointer ::mem/int ::mem/int pointer pointer]
+                              ::mem/int)
+     :bind-parameter-count  (coffi/cfn "sqlite3_bind_parameter_count"
+                              [pointer]
+                              ::mem/int)
+     :bind-null             (coffi/cfn "sqlite3_bind_null"
+                              [pointer ::mem/int]
+                              ::mem/int)
+     :bind-int64            (coffi/cfn "sqlite3_bind_int64"
+                              [pointer ::mem/int ::mem/long]
+                              ::mem/int)
+     :bind-double           (coffi/cfn "sqlite3_bind_double"
+                              [pointer ::mem/int ::mem/double]
+                              ::mem/int)
+     :bind-text64           (coffi/cfn "sqlite3_bind_text64"
+                              [pointer ::mem/int pointer ::mem/long pointer ::mem/int]
+                              ::mem/int)
+     :bind-blob64           (coffi/cfn "sqlite3_bind_blob64"
+                              [pointer ::mem/int pointer ::mem/long pointer]
+                              ::mem/int)
+     :step                  (coffi/cfn "sqlite3_step" [pointer] ::mem/int)
+     :finalize              (coffi/cfn "sqlite3_finalize" [pointer] ::mem/int)
      :vfs-find              (coffi/cfn "sqlite3_vfs_find" [pointer] pointer)
      :vfs-register          (coffi/cfn "sqlite3_vfs_register" [pointer ::mem/int] ::mem/int)
      :vfs-unregister        (coffi/cfn "sqlite3_vfs_unregister" [pointer] ::mem/int)}))
@@ -97,13 +125,11 @@
   (try
     (coffi/load-library library)
     (or @api (reset! api (create-api)))
-    (catch VirtualMachineError throwable
-      (throw throwable))
-    (catch Throwable throwable
+    (catch Exception error
       (fault "Unable to load SQLite native library"
              {:reason  ::library-load-failed
               :library library}
-             throwable))))
+             error))))
 
 (defn version
   {:malli/schema [:-> :string]}
@@ -138,6 +164,33 @@
 
 (defn exec [database sql callback callback-context error-message]
   ((:exec @api) database sql callback callback-context error-message))
+
+(defn prepare-v3 [database sql length flags statement-output tail-output]
+  ((:prepare-v3 @api) database sql length flags statement-output tail-output))
+
+(defn bind-parameter-count [statement]
+  ((:bind-parameter-count @api) statement))
+
+(defn bind-null [statement index]
+  ((:bind-null @api) statement index))
+
+(defn bind-int64 [statement index value]
+  ((:bind-int64 @api) statement index value))
+
+(defn bind-double [statement index value]
+  ((:bind-double @api) statement index value))
+
+(defn bind-text64 [statement index value length destructor encoding]
+  ((:bind-text64 @api) statement index value length destructor encoding))
+
+(defn bind-blob64 [statement index value length destructor]
+  ((:bind-blob64 @api) statement index value length destructor))
+
+(defn step [statement]
+  ((:step @api) statement))
+
+(defn finalize [statement]
+  ((:finalize @api) statement))
 
 (defn vfs-find [name]
   ((:vfs-find @api) name))

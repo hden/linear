@@ -4,12 +4,11 @@
    [cognitect.anomalies :as anomaly]
    [linear.adapter.sqlite.evaluation :as evaluation]
    [linear.adapter.sqlite.protocol :as sqlite]
-   [linear.adapter.sqlite.wal :as wal]
-   [linear.protocol :as protocol]))
+   [linear.usecase.database :as database]))
 
 (defrecord Snapshot [pages]
-  protocol/Snapshot
-  (-revision-id [_] "r0")
+  database/Snapshot
+  (-revision-id [_] "r-0")
   (-size [_] (count pages))
   (-fetch-pages-by-ids [_ {:keys [ids]}]
     (select-keys pages ids)))
@@ -19,7 +18,24 @@
     (aset 16 (byte 2))
     (aset 17 (byte 0))))
 
-(def ^:private snapshot (->Snapshot {"1" (page)}))
+(defn- put-u32! [^bytes bytes offset value]
+  (aset-byte bytes offset (unchecked-byte (bit-shift-right value 24)))
+  (aset-byte bytes (inc offset) (unchecked-byte (bit-shift-right value 16)))
+  (aset-byte bytes (+ offset 2) (unchecked-byte (bit-shift-right value 8)))
+  (aset-byte bytes (+ offset 3) (unchecked-byte value))
+  bytes)
+
+(defn- wal-header []
+  (doto (byte-array 32)
+    (put-u32! 0 0x377f0682)
+    (put-u32! 8 512)))
+
+(defn- commit-frame [page-number database-page-count]
+  (doto (byte-array (+ 24 512))
+    (put-u32! 0 page-number)
+    (put-u32! 4 database-page-count)))
+
+(def ^:private snapshot (->Snapshot {1 (page)}))
 
 (defn- open-file [filesystem path mode kind]
   (:file (sqlite/open filesystem
@@ -65,10 +81,11 @@
     (is (= ::evaluation/missing-commit (:reason (ex-data missing)))))
   (let [filesystem (evaluation/evaluation snapshot "/linear/eval.db")
         wal-file   (open-file filesystem "/linear/eval.db-wal" :read-write :wal)]
-    (with-redefs [wal/sync (fn [capture]
-                             [capture {:database-page-count 1}])]
-      (sqlite/sync wal-file)
-      (sqlite/sync wal-file))
+    (sqlite/write wal-file 0 (wal-header))
+    (sqlite/write wal-file 32 (commit-frame 1 1))
+    (sqlite/sync wal-file)
+    (sqlite/write wal-file (+ 32 24 512) (commit-frame 2 2))
+    (sqlite/sync wal-file)
     (let [multiple (try
                      (evaluation/commit filesystem)
                      nil
