@@ -116,10 +116,39 @@
             (add-suppressed! error close-error)))
         (throw error)))))
 
+(defn- read-session [store database]
+  (let [leased-database (connection/database store (:id database))
+        raw-snapshot    (try
+                          (connection/read-only-snapshot leased-database)
+                          (catch Exception error
+                            (try
+                              (.close ^AutoCloseable leased-database)
+                              (catch Exception close-error
+                                (add-suppressed! error close-error)))
+                            (throw error)))]
+    (try
+      (let [read-values #(ffi/await
+                           (ffi/read-snapshot-values raw-snapshot %))
+            close!       #(close-snapshot-resources! raw-snapshot
+                                                     leased-database)]
+        (snapshot/read-session read-values
+                               (:keychain database)
+                               close!))
+      (catch Exception error
+        (try
+          (close-snapshot-resources! raw-snapshot leased-database)
+          (catch Exception close-error
+            (add-suppressed! error close-error)))
+        (throw error)))))
+
 (extend-type linear.adapter.slatedb.connection.Connection
   database/SnapshotReader
   (-latest-snapshot [store database]
     (latest-snapshot store database))
+
+  database/DatabaseReader
+  (-open-read-session [store database]
+    (read-session store database))
 
   database/RevisionWriter
   (-publish-next-revision! [store database revision]

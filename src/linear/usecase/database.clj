@@ -28,6 +28,27 @@
    [:display-name :string]
    [:keychain ::keychain]])
 
+(defprotocol DatabaseResolver
+  (-resolve-database [resolver database-id]))
+
+(defn database-resolver? [value]
+  (satisfies? DatabaseResolver value))
+
+(defmethod spec-for ::database-resolver [_]
+  [:fn database-resolver?])
+
+(defn resolve-database
+  {:malli/schema [:->
+                  ::database-resolver
+                  ::database-id
+                  ::database]}
+  [resolver database-id]
+  (or (-resolve-database resolver database-id)
+      (throw (ex-info "Database was not found"
+                      {::anomaly/category ::anomaly/not-found
+                       :reason ::database-not-found
+                       :database-id database-id}))))
+
 (defmethod spec-for ::revision [_]
   [:map
    [:revision-id ::revision-id]
@@ -43,7 +64,7 @@
             (bytes? %))])
 
 (defmethod spec-for ::statement [_]
-  [:map
+  [:map {:closed true}
    [:sql :string]
    [:parameters [:vector ::sqlite-scalar]]])
 
@@ -102,6 +123,42 @@
 (defprotocol SnapshotReader
   (-latest-snapshot [reader database]))
 
+(defprotocol DatabaseReader
+  (-open-read-session [reader database]))
+
+(defn database-reader? [value]
+  (satisfies? DatabaseReader value))
+
+(defmethod spec-for ::database-reader [_]
+  [:fn database-reader?])
+
+(defprotocol DatabaseReadSession
+  (-head [session])
+  (-as-of [session revision-id])
+  (-changes-since [session target-revision-id client-revision-id]))
+
+(defn database-read-session? [value]
+  (satisfies? DatabaseReadSession value))
+
+(defmethod spec-for ::database-read-session [_]
+  [:fn database-read-session?])
+
+(defn open-read-session
+  [reader database]
+  (-open-read-session reader database))
+
+(defn head
+  [session]
+  (-head session))
+
+(defn as-of
+  [session revision-id]
+  (-as-of session revision-id))
+
+(defn changes-since
+  [session target-revision-id client-revision-id]
+  (-changes-since session target-revision-id client-revision-id))
+
 (defn snapshot-reader? [value]
   (satisfies? SnapshotReader value))
 
@@ -144,7 +201,7 @@
 (defn- revision-conflict? [error]
   (= ::revision-conflict (:reason (ex-data error))))
 
-(defn- ensure-descends-from! [parent revision]
+(defn- ensure-descends-from [parent revision]
   (when-not (= parent (:parent revision))
     (throw (ex-info "Evaluator revision does not descend from the snapshot"
                     {::anomaly/category ::anomaly/fault
@@ -163,7 +220,7 @@
                          (evaluate evaluator
                                    {:snapshot snapshot
                                     :command command})]
-                     (ensure-descends-from! parent evaluated-revision)
+                     (ensure-descends-from parent evaluated-revision)
                      evaluated-revision))]
     (publish-next-revision! revision-writer database revision)))
 
@@ -192,3 +249,48 @@
                          :attempts 3}
                         error))
         (throw error)))))
+
+(defn push-for!
+  [context database-id command]
+  (push! context
+         (resolve-database (:database-resolver context) database-id)
+         command))
+
+(defn pull
+  {:malli/schema [:->
+                  ::database-reader
+                  ::database
+                  [:map
+                   [:client-revision {:optional true} [:maybe ::revision-id]]
+                   [:server-revision {:optional true} [:maybe ::revision-id]]
+                   [:page-ids {:optional true} [:maybe [:set ::page-id]]]]
+                  [:map
+                   [:server-revision ::revision-id]
+                   [:database-page-count nat-int?]
+                   [:pages [:map-of ::page-id ::page]]]]}
+  [database-reader database {:keys [client-revision server-revision page-ids]}]
+  (with-open [^AutoCloseable session (open-read-session database-reader database)]
+    (let [snapshot        (if server-revision
+                            (as-of session server-revision)
+                            (head session))
+          target-revision (revision-id snapshot)
+          page-count      (size snapshot)
+          changed-page-ids (if client-revision
+                             (if (= client-revision target-revision)
+                               #{}
+                               (changes-since session
+                                              target-revision
+                                              client-revision))
+                             (set (range 1 (inc page-count))))
+          selected-page-ids (if page-ids
+                              (set (filter page-ids changed-page-ids))
+                              changed-page-ids)]
+      {:server-revision       target-revision
+       :database-page-count   page-count
+       :pages                 (fetch-pages-by-ids snapshot {:ids selected-page-ids})})))
+
+(defn pull-for
+  [context database-id pull-options]
+  (pull (:database-reader context)
+        (resolve-database (:database-resolver context) database-id)
+        pull-options))

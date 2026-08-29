@@ -145,3 +145,37 @@
               (get (database/fetch-pages-by-ids snapshot {:ids #{1}}) 1))))
       (finally
         (connection/close store)))))
+
+(deftest reads-as-of-and-changes-since-through-one-domain-capability
+  (let [store     (connection/open {:object-store-url   "memory:///"
+                                    :max-open-databases 1})
+        keychain  (tempel/keychain)
+        root      {:revision-id         "r-root"
+                   :parent              nil
+                   :database-page-count 1
+                   :pages               {1 (byte-array [1])}}
+        first     {:revision-id         "r-first"
+                   :parent              "r-root"
+                   :database-page-count 2
+                   :pages               {2 (byte-array [2])}}
+        second    {:revision-id         "r-second"
+                   :parent              "r-first"
+                   :database-page-count 2
+                   :pages               {1 (byte-array [3])}}
+        database  (database-record keychain)]
+    (try
+      (seed! store keychain root)
+      (is (= first
+             (database/publish-next-revision! store database first)))
+      (is (= second
+             (database/publish-next-revision! store database second)))
+      (with-open [session (database/open-read-session store database)]
+        (let [as-of (database/as-of session "r-first")]
+          (is (= "r-first" (database/revision-id as-of)))
+          (is (= 2 (database/size as-of))))
+        (is (= #{1 2}
+               (database/changes-since session "r-second" "r-root")))
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (database/changes-since session "r-second" "r-missing"))))
+      (finally
+        (connection/close store)))))

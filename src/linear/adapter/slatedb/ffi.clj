@@ -83,6 +83,8 @@
 (defn open-object-store [url]
   (try
     (ObjectStore/resolve url)
+    (catch LinkageError error
+      (throw (classify-error :open-object-store error)))
     (catch Exception error
       (throw (classify-error :open-object-store error)))))
 

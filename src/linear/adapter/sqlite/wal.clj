@@ -1,7 +1,9 @@
 (ns linear.adapter.sqlite.wal
   (:refer-clojure :exclude [read sync])
   (:require
-   [linear.adapter.sqlite.core :refer [fault]]))
+   [linear.adapter.sqlite.core :refer [fault]]
+   [linear.spec :as spec]
+   [linear.usecase.database :as database]))
 
 (def ^:private ^:const wal-header-size 32)
 (def ^:private ^:const frame-header-size 24)
@@ -91,6 +93,10 @@
                                      page-size)]
             (let [page-number (u32 header 0)
                   page-count (u32 header 4)
+                  _          (when-not (spec/valid? ::database/page-id page-number)
+                               (fault "Invalid SQLite WAL page number"
+                                      {:reason      ::invalid-page-number
+                                       :page-number page-number}))
                   pages (assoc (:pending-pages capture) page-number page)
                   capture (assoc capture
                                  :next-frame-offset (long (+ offset frame-header-size page-size))

@@ -1,8 +1,8 @@
 (ns linear.adapter.sqlite.evaluator
   (:require
-   [clj-ulid :refer [ulid]]
    [cognitect.anomalies :as anomaly]
    [diehard.core :refer [with-timeout]]
+   [hden.ulid :refer [ulid]]
    [integrant.core :as integrant]
    [linear.adapter.sqlite.connection :as connection]
    [linear.adapter.sqlite.core :refer [fault]]
@@ -49,9 +49,11 @@
 (defn- execute-command! [invocation sqlite-database command]
   (execute! invocation sqlite-database {:operation :begin} "BEGIN IMMEDIATE")
   (let [outcome (try
-                  (doseq [statement (:statements command)]
+                  (doseq [[statement-index statement]
+                          (map-indexed vector (:statements command))]
                     (call-sqlite invocation
-                                 {:operation :execute}
+                                 {:operation :execute
+                                  :statement-index statement-index}
                                  #(connection/execute-statement sqlite-database statement)))
                   (execute! invocation sqlite-database {:operation :commit} "COMMIT")
                   {:value nil}
@@ -121,10 +123,10 @@
 (alter-meta! #'map->Evaluator assoc :private true)
 
 (defmethod integrant/init-key :linear.adapter.sqlite.evaluator/evaluator
-  [_ {:keys [library name shutdown-timeout-ms]
+  [_ {:keys [name shutdown-timeout-ms]
       :or {name "linear-sqlite"
            shutdown-timeout-ms default-shutdown-timeout-ms}}]
-  (->Evaluator (vfs/install {:library library :name name})
+  (->Evaluator (vfs/install {:name name})
                (atom {:status :ready
                       :liveness :ok
                       :active 0

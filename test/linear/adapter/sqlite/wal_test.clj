@@ -95,6 +95,17 @@
                   ex))]
     (is (= ::anomaly/fault (-> error ex-data ::anomaly/category)))))
 
+(deftest zero-page-number-is-reported-as-a-fault
+  (let [error (try
+                (-> (wal/new-capture)
+                    (wal/write {:offset 0 :bytes (wal-header)})
+                    (wal/write {:offset 32
+                                :bytes (frame 0 1 (byte-array page-size))}))
+                nil
+                (catch clojure.lang.ExceptionInfo ex
+                  ex))]
+    (is (= ::anomaly/fault (-> error ex-data ::anomaly/category)))))
+
 (deftest overlapping-writes-are-read-as-one-byte-range
   (let [capture (-> (wal/new-capture)
                     (wal/write {:offset 0 :bytes (byte-array [1 2 3])})

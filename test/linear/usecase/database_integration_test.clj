@@ -8,6 +8,7 @@
    [linear.adapter.slatedb.key :as key]
    [linear.adapter.slatedb.store]
    [linear.adapter.sqlite.evaluator]
+   [linear.adapter.sqlite.test-support :as support]
    [linear.usecase.database :as database]
    [taoensso.tempel :as tempel])
   (:import
@@ -66,12 +67,11 @@
     (ffi/await (ffi/commit-transaction transaction))))
 
 (deftest pushes-through-domain-sqlite-and-slatedb-boundaries
-  (when-let [library (System/getenv "SQLITE_LIBRARY")]
+  (when (support/sqlite-available?)
     (let [keychain  (tempel/keychain)
           store     (connection/open {:object-store-url   "memory:///"
                                       :max-open-databases 1})
-          evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator
-                                        {:library library})
+          evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator {})
           capabilities {:snapshot-reader store
                         :revision-writer store
                         :evaluator evaluator}

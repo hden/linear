@@ -17,8 +17,8 @@
       revision-id)
     (-size [_]
       1)
-    (-fetch-pages-by-ids [_ _]
-      {1 (byte-array [1])})))
+    (-fetch-pages-by-ids [_ {:keys [ids]}]
+      (select-keys {1 (byte-array [1])} ids))))
 
 (defn- conflict []
   (ex-info "Revision conflict"
@@ -60,6 +60,33 @@
             :snapshot-close
             [:publish revision]]
            @events))))
+
+(deftest push-passes-the-domain-command-to-the-evaluator
+  (let [evaluated (atom nil)
+        source    (reify database/SnapshotReader
+                    (-latest-snapshot [_ _]
+                      (snapshot "r-current" (atom []))))
+        evaluator (reify database/Evaluator
+                    (-evaluate [_ {:keys [command]}]
+                      (reset! evaluated command)
+                      {:revision-id "r-next"
+                       :parent "r-current"
+                       :database-page-count 1
+                       :pages {}}))
+        publisher (reify database/RevisionWriter
+                    (-publish-next-revision! [_ _ revision]
+                      revision))]
+    (database/push! {:snapshot-reader source
+                     :revision-writer publisher
+                     :evaluator evaluator}
+                    {:id "d-1"
+                     :display-name "Primary"
+                     :keychain ::keychain}
+                    {:statements [{:sql "UPDATE t SET value = ? WHERE id = ?"
+                                   :parameters ["next" 1]}]})
+    (is (= [{:sql "UPDATE t SET value = ? WHERE id = ?"
+             :parameters ["next" 1]}]
+           (:statements @evaluated)))))
 
 (deftest revision-conflict-repeats-snapshot-and-evaluation
   (let [snapshot-ids (atom ["r-first" "r-second"])
@@ -190,3 +217,63 @@
            :parent nil
            :database-page-count 0
            :pages {}}))))
+
+(deftest pull-uses-one-revision-aware-read-session
+  (let [events       (atom [])
+        head         (snapshot "r-head" events)
+        target       (snapshot "r-target" events)
+        read-session (reify
+                       AutoCloseable
+                       (close [_]
+                         (swap! events conj :read-session-close))
+                       database/DatabaseReadSession
+                       (-head [_]
+                         (swap! events conj :head)
+                         head)
+                       (-as-of [_ revision-id]
+                         (swap! events conj [:as-of revision-id])
+                         target)
+                       (-changes-since [_ target-revision client-revision]
+                         (swap! events conj [:since target-revision client-revision])
+                         #{1}))
+        reader       (reify database/DatabaseReader
+                       (-open-read-session [_ _]
+                         (swap! events conj :read-session-open)
+                         read-session))
+        result       (database/pull reader
+                                    {:id "d-1"
+                                     :display-name "Primary"
+                                     :keychain ::keychain}
+                                    {:server-revision "r-target"
+                                     :client-revision "r-client"})]
+    (is (= "r-target" (:server-revision result)))
+    (is (= [:read-session-open
+            [:as-of "r-target"]
+            [:since "r-target" "r-client"]
+            :read-session-close]
+           @events))))
+
+(deftest pull-applies-a-domain-page-selector
+  (let [snapshot    (reify
+                      database/Snapshot
+                      (-revision-id [_] "r-current")
+                      (-size [_] 2)
+                      (-fetch-pages-by-ids [_ {:keys [ids]}]
+                        (select-keys {1 (byte-array [1])
+                                      2 (byte-array [2])}
+                          ids)))
+        read-session (reify
+                       java.lang.AutoCloseable
+                       (close [_])
+                       database/DatabaseReadSession
+                       (-head [_] snapshot)
+                       (-as-of [_ _] snapshot)
+                       (-changes-since [_ _ _] #{}))
+        reader      (reify database/DatabaseReader
+                      (-open-read-session [_ _] read-session))
+        result      (database/pull reader
+                                   {:id "d-1"
+                                    :display-name "Primary"
+                                    :keychain ::keychain}
+                                   {:page-ids #{2}})]
+    (is (= #{2} (set (keys (:pages result)))))))

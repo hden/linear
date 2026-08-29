@@ -25,9 +25,9 @@
       :else (recur (ex-cause current)))))
 
 (deftest evaluates-sql-through-the-native-evaluator
-  (when-let [library (System/getenv "SQLITE_LIBRARY")]
+  (when (support/sqlite-available?)
     (Class/forName "org.sqlite.JDBC")
-    (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator {:library library})]
+    (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator {})]
       (try
         (let [result (database/evaluate
                        evaluator
@@ -42,10 +42,10 @@
           (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator))))))
 
 (deftest computes-independent-revisions-from-the-same-snapshot
-  (when-let [library (System/getenv "SQLITE_LIBRARY")]
+  (when (support/sqlite-available?)
     (Class/forName "org.sqlite.JDBC")
     (let [base (support/snapshot (support/sqlite-image))
-          evaluator  (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator {:library library})]
+          evaluator  (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator {})]
       (try
         (let [evaluate-async (fn [value]
                                (future
@@ -64,9 +64,8 @@
           (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator))))))
 
 (deftest binds-all-domain-scalar-types
-  (when-let [library (System/getenv "SQLITE_LIBRARY")]
-    (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator
-                                        {:library library})]
+  (when (support/sqlite-available?)
+    (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator {})]
       (try
         (let [result (database/evaluate
                        evaluator
@@ -91,9 +90,8 @@
           (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator))))))
 
 (deftest rejects-multiple-statements-and-transaction-control
-  (when-let [library (System/getenv "SQLITE_LIBRARY")]
-    (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator
-                                        {:library library})
+  (when (support/sqlite-available?)
+    (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator {})
           base      (support/snapshot (support/sqlite-image))]
       (try
         (doseq [sql ["UPDATE t SET value = 'one'; UPDATE t SET value = 'two'"
@@ -107,9 +105,8 @@
           (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator))))))
 
 (deftest evaluator-recovers-after-a-statement-failure
-  (when-let [library (System/getenv "SQLITE_LIBRARY")]
-    (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator
-                                        {:library library})
+  (when (support/sqlite-available?)
+    (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator {})
           base      (support/snapshot (support/sqlite-image))]
       (try
         (is (thrown? clojure.lang.ExceptionInfo
@@ -129,9 +126,8 @@
           (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator))))))
 
 (deftest evaluator-recovers-after-a-snapshot-callback-failure
-  (when-let [library (System/getenv "SQLITE_LIBRARY")]
-    (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator
-                                        {:library library})
+  (when (support/sqlite-available?)
+    (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator {})
           base      (support/snapshot (support/sqlite-image))
           cause     (ex-info "snapshot read failed" {:reason ::snapshot-read-failed})
           failing   (->FailingSnapshot base (atom 0) cause)]
