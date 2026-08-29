@@ -1,10 +1,10 @@
 (ns linear.adapter.sqlite.vfs
   "Coffi-facing SQLite VFS support."
   (:require
-   [clj-ulid :refer [ulid]]
    [coffi.ffi :as coffi]
    [coffi.mem :as mem]
    [cognitect.anomalies :as anomaly]
+   [hden.ulid :refer [ulid]]
    [linear.adapter.sqlite.core :refer [fault]]
    [linear.adapter.sqlite.ffi :as ffi]
    [linear.adapter.sqlite.protocol :as sqlite]
@@ -29,7 +29,6 @@
 
 (defmethod spec-for ::options [_]
   [:map
-   [:library :string]
    [:name {:optional true} :string]])
 
 (defmethod spec-for ::invocation [_]
@@ -462,9 +461,9 @@
 
 (defn install
   {:malli/schema [:-> ::options ::resources]}
-  [{:keys [library name]
+  [{:keys [name]
     :or {name (str "rt-" (ulid))}}]
-  (ffi/load! library)
+  (ffi/load!)
   (let [arena       (mem/shared-arena)
         parent      (ffi/vfs-find mem/null)
         parent-vfs  (mem/as-segment (mem/address-of parent) vfs-size)

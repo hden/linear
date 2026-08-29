@@ -8,8 +8,10 @@
 .calva
 .lsp/.cache
 .dir-locals.el
-
 docs/notes
 docs/superpowers
 .superpowers
-libslatedb_uniffi.dylib
+*.dylib
+test/resources/*.jar
+node_modules
+.env

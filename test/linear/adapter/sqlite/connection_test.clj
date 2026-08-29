@@ -10,11 +10,10 @@
   (:import
    (java.util UUID)))
 
-(defn- call-with-native-connection [library f]
+(defn- call-with-native-connection [f]
   (let [identifier (str (UUID/randomUUID))
         path       (str "/linear/" identifier ".db")
-        resources  (vfs/install {:library library
-                                 :name    (str "test-" identifier)})]
+        resources  (vfs/install {:name (str "test-" identifier)})]
     (try
       (let [invocation (vfs/mount resources
                                   {:path       path
@@ -36,9 +35,8 @@
         (vfs/uninstall resources)))))
 
 (deftest execute-translates-native-sqlite-errors
-  (when-let [library (System/getenv "SQLITE_LIBRARY")]
+  (when (support/sqlite-available?)
     (call-with-native-connection
-      library
       (fn [database]
         (let [failure (try
                         (connection/execute database "not valid SQL")
@@ -53,9 +51,8 @@
           (is (string/includes? (:sqlite-message data) "syntax error")))))))
 
 (deftest execute-rejects-a-closed-connection
-  (when-let [library (System/getenv "SQLITE_LIBRARY")]
+  (when (support/sqlite-available?)
     (call-with-native-connection
-      library
       (fn [database]
         (connection/close database)
         (let [failure (try
@@ -67,9 +64,8 @@
                  (:reason (ex-data failure)))))))))
 
 (deftest close-is-idempotent
-  (when-let [library (System/getenv "SQLITE_LIBRARY")]
+  (when (support/sqlite-available?)
     (call-with-native-connection
-      library
       (fn [database]
         (connection/close database)
         (is (nil? (connection/close database)))))))

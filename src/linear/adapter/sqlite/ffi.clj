@@ -120,15 +120,22 @@
      :vfs-unregister        (coffi/cfn "sqlite3_vfs_unregister" [pointer] ::mem/int)}))
 
 (defn load!
-  {:malli/schema [:-> :string :map]}
-  [library]
+  {:malli/schema [:-> :map]}
+  []
   (try
-    (coffi/load-library library)
+    (coffi/load-system-library "sqlite3")
     (or @api (reset! api (create-api)))
+    (catch LinkageError error
+      (fault "Unable to load SQLite native library"
+             {:reason  ::library-load-failed
+              :library "sqlite3"
+              :library-path (System/getProperty "java.library.path")}
+             error))
     (catch Exception error
       (fault "Unable to load SQLite native library"
              {:reason  ::library-load-failed
-              :library library}
+              :library "sqlite3"
+              :library-path (System/getProperty "java.library.path")}
              error))))
 
 (defn version

@@ -1,10 +1,19 @@
 (ns linear.adapter.sqlite.test-support
   (:require
+   [clojure.java.io :as io]
+   [clojure.string :as string]
    [linear.usecase.database :as database])
   (:import
    (java.nio.file Files)
    (java.sql DriverManager)
    (java.util Arrays)))
+
+(defn sqlite-available? []
+  (let [filename (System/mapLibraryName "sqlite3")]
+    (some #(.isFile (io/file % filename))
+          (string/split (System/getProperty "java.library.path")
+                        (re-pattern (java.util.regex.Pattern/quote
+                                      java.io.File/pathSeparator))))))
 
 (defrecord Snapshot [revision-id pages]
   database/Snapshot

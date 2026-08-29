@@ -2,7 +2,7 @@
   (:require
    [clojure.string :as str]
    [cognitect.anomalies :as anomalies]
-   [linear.spec :refer [spec-for]]
+   [linear.spec :as spec]
    [malli.core :as m]
    [malli.dev.pretty :as pretty]
    [malli.instrument :as mi]
@@ -51,22 +51,4 @@
           (contains? namespace? ns))]})
     test-plan))
 
-(def local-registry
-  (reify mr/Registry
-    (-schema [_ key]
-      (spec-for key))
-    (-schemas [_]
-      (into {}
-            (comp
-              (filter (fn [[key & _]]
-                        (not= key :default)))
-              (map (fn [[key f]]
-                     [key (f key)])))
-            (methods spec-for)))))
-
-(def registry
-  (mr/composite-registry
-    (m/default-schemas)
-    local-registry))
-
-(mr/set-default-registry! registry)
+(mr/set-default-registry! spec/registry)

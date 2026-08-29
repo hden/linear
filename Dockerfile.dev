@@ -4,7 +4,7 @@ ARG BABASHKA_VERSION=1.13.219
 ARG TARGETARCH
 
 RUN apt-get update \
- && apt-get install --yes --no-install-recommends curl nodejs npm rlwrap unzip \
+ && apt-get install --yes --no-install-recommends curl libsqlite3-dev nodejs npm rlwrap unzip \
  && rm -rf /var/lib/apt/lists/* \
  && curl --fail --location --silent --show-error \
       --output /tmp/install-clojure.sh \
@@ -32,6 +32,9 @@ RUN clojure -P \
     esac \
  && slatedb_jar=$(find /root/.m2/repository/io/slatedb/slatedb-uniffi -name 'slatedb-uniffi-*.jar' -print -quit) \
  && unzip -p "$slatedb_jar" "$slatedb_platform/libslatedb_uniffi.so" > /usr/local/lib/libslatedb_uniffi.so \
+ && sqlite_library=$(find /usr/lib -name libsqlite3.so -print -quit) \
+ && test -n "$sqlite_library" \
+ && cp -L "$sqlite_library" /usr/local/lib/libsqlite3.so \
  && ldconfig
 
 ENV JAVA_TOOL_OPTIONS="--enable-native-access=ALL-UNNAMED -Djava.library.path=/usr/local/lib"
