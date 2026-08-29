@@ -1,18 +1,19 @@
 {:vars
- {jdbc-url                 {:env "JDBC_DATABASE_URL"
+ {port                     {:env "PORT"
+                            :type :int
+                            :default 3000}
+  jdbc-url                 {:env "JDBC_DATABASE_URL"
                             :default "jdbc:postgresql://localhost:5432/linear?user=postgres&password=postgres"}
   slatedb-object-store-url {:env "SLATEDB_OBJECT_STORE_URL"
                             :default "memory:///"}
   slatedb-max-open-databases {:env "SLATEDB_MAX_OPEN_DATABASES"
                               :type :int
                               :default 128}
-  sqlite-library           {:env "SQLITE_LIBRARY"}
   sqlite-vfs-name          {:env "SQLITE_VFS_NAME"
                             :default "linear-sqlite"}}
  :system
  {:linear.adapter.sqlite.evaluator/evaluator
-  {:library #ig/var sqlite-library
-   :name    #ig/var sqlite-vfs-name}
+  {:name #ig/var sqlite-vfs-name}
 
   :linear.adapter.slatedb.store/store
   {:object-store-url   #ig/var slatedb-object-store-url
@@ -23,6 +24,8 @@
   :duct.module/sql
   {:migrations #duct/include "migrations.edn"}
 
+  :linear.handler.turso.common/database-resolver {}
+
   :duct.module/web
   {:features #{:api}
    :handler-opts
@@ -30,7 +33,15 @@
     :linear.usecase.core/postgres-datasource #ig/ref :duct.database.sql/hikaricp
     :linear.usecase.core/database-evaluator  #ig/ref :linear.adapter.sqlite.evaluator/evaluator
     :linear.usecase.core/snapshot-reader     #ig/ref :linear.adapter.slatedb.store/store
-    :linear.usecase.core/revision-writer     #ig/ref :linear.adapter.slatedb.store/store}
+    :linear.usecase.core/revision-writer     #ig/ref :linear.adapter.slatedb.store/store
+    :database-resolver                       #ig/ref :linear.handler.turso.common/database-resolver
+    :evaluator                               #ig/ref :linear.adapter.sqlite.evaluator/evaluator
+    :snapshot-reader                         #ig/ref :linear.adapter.slatedb.store/store
+    :database-reader                         #ig/ref :linear.adapter.slatedb.store/store
+    :revision-writer                         #ig/ref :linear.adapter.slatedb.store/store}
+   :middleware [:linear.handler.turso.push/request-body-limit]
    :routes
    [["/health/ready" {:get :linear.handler.health/ready}]
-    ["/health/ok" {:get :linear.handler.health/ok}]]}}}
+    ["/health/ok" {:get :linear.handler.health/ok}]
+    ["/d/:id/pull-updates" {:post :linear.handler.turso.pull/handler}]
+    ["/d/:id/v2/pipeline" {:post :linear.handler.turso.push/handler}]]}}}

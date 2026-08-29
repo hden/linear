@@ -1,16 +1,19 @@
 (ns linear.handler.turso.push
   (:require
    [cognitect.anomalies :as anomaly]
+   [integrant.core :as ig]
+   [linear.handler.turso.hrana :as hrana]
    [linear.usecase.database :as database]
    [malli.core :as m]
    [malli.transform :as mt])
   (:import
+   (java.io FilterInputStream InputStream)
    (java.util Base64)))
 
 (def ^:private ^:const max-statements 1000)
 (def ^:private ^:const max-request-bytes (* 16 1024 1024))
 
-(defn- invalid! [message reason]
+(defn- invalid [message reason]
   (throw (ex-info message
                   {::anomaly/category ::anomaly/incorrect
                    :reason reason})))
@@ -105,36 +108,132 @@
 (def ^:private valid-step-count?
   (m/validator [:vector {:max (+ max-statements 2)} :any]))
 
-(defn- body-statement [step]
+(defn- statement-from-wire-step [step]
   {:sql (get-in step [:stmt :sql])
    :parameters (mapv decode-wire-value (get-in step [:stmt :args]))})
 
-(defn- validate-limits! [body-size steps]
+(defn- validate-limits [body-size steps]
   (when-not (valid-request-size? body-size)
-    (invalid! "Push request is too large"
+    (invalid "Push request is too large"
               ::request-too-large))
   (when-not (valid-step-count? steps)
-    (invalid! "Push has too many statements"
+    (invalid "Push has too many statements"
               ::too-many-statements)))
 
-(defn- validate-batch! [batch]
+(defn- validate-batch [batch]
   (when-not (valid-batch? batch)
-    (invalid! "Push batch is not canonical" ::invalid-push-batch))
+    (invalid "Push batch is not canonical" ::invalid-push-batch))
   (doseq [step (-> batch :steps pop rest)
           value (get-in step [:stmt :args])]
     (when-not (valid-wire-value? value)
-      (invalid! "Push argument is invalid" ::invalid-value))))
+      (invalid "Push argument is invalid" ::invalid-value))))
 
-(defn ->command
+(defn parse-command
   {:malli/schema [:->
                   [:map
                    [:body-size nat-int?]
                    [:batch :map]]
-                  ::database/push-command]}
+                  [:map
+                   [:command ::database/push-command]
+                   [:wire-indexes [:vector nat-int?]]]]}
   [{:keys [body-size batch]}]
   (let [steps (:steps batch)]
-    (validate-limits! body-size steps)
-    (validate-batch! batch)
+    (validate-limits body-size steps)
+    (validate-batch batch)
     (let [last-index (dec (count steps))
-          body       (subvec steps 1 last-index)]
-      {:statements (mapv body-statement body)})))
+          body-steps (subvec steps 1 last-index)
+          indexed-statements (->> (map-indexed (fn [index step]
+                                                 [(inc index) step])
+                                               body-steps)
+                               (remove (fn [[_ step]]
+                                         (hrana/sync-metadata-statement? (:stmt step))))
+                               vec)]
+      {:command {:statements (mapv (fn [[_ step]]
+                                     (statement-from-wire-step step))
+                                   indexed-statements)}
+       :wire-indexes (mapv first indexed-statements)})))
+
+(defn command [request]
+  (:command (parse-command request)))
+
+(defn- request-content-length [request]
+  (let [value (get-in request [:headers "content-length"])]
+    (cond
+      (string? value) (try
+                        (Long/parseLong value)
+                        (catch NumberFormatException _
+                          (invalid "Content-Length is invalid"
+                                    ::invalid-content-length)))
+      :else 0)))
+
+(defn- request-too-large []
+  (invalid "Push request is too large" ::request-too-large))
+
+(defn- limited-input-stream [^InputStream input max-bytes]
+  (let [read-bytes (atom 0)]
+    (proxy [FilterInputStream] [input]
+      (read
+        ([]
+         (let [result (.read input)]
+           (if (= -1 result)
+             -1
+             (if (< @read-bytes max-bytes)
+               (do (swap! read-bytes inc) result)
+               (request-too-large)))))
+        ([^bytes bytes]
+         (.read ^InputStream this bytes 0 (alength bytes)))
+        ([^bytes bytes ^long offset ^long length]
+         (if (zero? length)
+           0
+           (let [remaining (- max-bytes @read-bytes)]
+             (if (zero? remaining)
+               (let [result (.read input)]
+                 (if (= -1 result)
+                   -1
+                   (request-too-large)))
+               (let [result (.read input bytes offset (min length remaining))]
+                 (when (pos? result)
+                   (swap! read-bytes + result))
+                 result)))))))))
+
+(defn- push-request? [request]
+  (re-matches #"/d/[^/]+/v2/pipeline" (:uri request)))
+
+(defn wrap-request-body-limit [handler max-bytes]
+  (fn [{:keys [body] :as request}]
+    (try
+      (handler (if (and (push-request? request)
+                        (instance? InputStream body))
+                 (assoc request :body (limited-input-stream body max-bytes))
+                 request))
+      (catch clojure.lang.ExceptionInfo error
+        (if (= ::request-too-large (:reason (ex-data error)))
+          (hrana/error-response error)
+          (throw error))))))
+
+(defmethod ig/init-key ::request-body-limit [_ _]
+  #(wrap-request-body-limit % max-request-bytes))
+
+(defn- handle-batch [context request batch]
+  (let [{:keys [command wire-indexes]}
+        (parse-command {:body-size (request-content-length request)
+                        :batch batch})]
+    (try
+      (database/push-for! context
+                          (:id (:path-params request))
+                          command)
+      (hrana/batch-response (count (:steps batch)))
+      (catch Exception error
+        (if (hrana/statement-error? error)
+          (hrana/batch-error-response batch error wire-indexes)
+          (throw error))))))
+
+(defn handler [context]
+  (fn [{:keys [body-params] :as request}]
+    (try
+      (let [batch (hrana/single-batch body-params)]
+        (if (hrana/last-change-id-query? batch)
+          (hrana/last-change-id-response)
+          (handle-batch context request batch)))
+      (catch Exception error
+        (hrana/error-response error)))))
