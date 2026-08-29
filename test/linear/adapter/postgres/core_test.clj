@@ -6,7 +6,8 @@
    [linear.test :refer [run]]))
 
 (deftest query
-  (with-system [sys (run {:keys [:duct.database/sql]})]
+  (with-system [sys (run {:keys [:duct.database/sql
+                                 :duct.migrator/ragtime]})]
     (let [datasource (:duct.database.sql/hikaricp sys)]
       (testing "test harness"
         (is (core/datasource? datasource)))

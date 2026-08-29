@@ -1,9 +1,9 @@
 (ns linear.adapter.postgres.core
   (:require
-   [clj-ulid :refer [ulid]]
    [clojure.string :as string]
    [cognitect.anomalies :as anomaly]
    [diehard.core :refer [with-retry with-timeout]]
+   [hden.ulid :refer [ulid]]
    [honey.sql :as honeysql]
    [linear.spec :refer [spec-for]]
    [next.jdbc :as jdbc]
