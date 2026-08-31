@@ -1,0 +1,11 @@
+{
+  "name": "linear-turso-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "e2e": "node test/e2e/turso-sync.mjs"
+  },
+  "dependencies": {
+    "@tursodatabase/sync": "0.7.1"
+  }
+}

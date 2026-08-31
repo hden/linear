@@ -25,6 +25,19 @@
            {::anomaly/category ::anomaly/conflict
             :reason ::database/revision-conflict}))
 
+(deftest resolve-database-reports-a-missing-database
+  (let [error (try
+                (database/resolve-database
+                  (reify database/DatabaseResolver
+                    (-resolve-database [_ _] nil))
+                  "d-missing")
+                nil
+                (catch clojure.lang.ExceptionInfo failure
+                  failure))]
+    (is (= ::anomaly/not-found (-> error ex-data ::anomaly/category)))
+    (is (= ::database/database-not-found (-> error ex-data :reason)))
+    (is (= "d-missing" (-> error ex-data :database-id)))))
+
 (deftest push-evaluates-a-current-snapshot-before-publishing
   (let [events   (atom [])
         revision {:revision-id "r-next"

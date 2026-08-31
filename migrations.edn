@@ -17,7 +17,6 @@
           , owner            text
           , ciphertext       bytea
           , encrypted_by     text
-          , key_checksum     bytea       NOT NULL
           , metadata         jsonb
           , created_by       text        NOT NULL REFERENCES transactions (id)
           , created_at       timestamptz NOT NULL DEFAULT now()
@@ -76,7 +75,6 @@
          "COMMENT ON COLUMN vaults.owner IS 'Who this vault belongs to, as an opaque external label: searched by and audited with, never interpreted and never unique. Several live vaults under one owner are legitimate, which is what gives an application shredding granularity finer than a whole customer without toro knowing why (ADR-0006).'"
          "COMMENT ON COLUMN vaults.ciphertext IS 'The data encryption key of this vault, encrypted. The plaintext exists only in memory, while it is in use. Empty once the owner was handed their key and this copy was deleted, which is the one destruction in this schema — the row itself stays, so what it says about a vault that was given up is that its layers are unreadable rather than that it never existed.'"
          "COMMENT ON COLUMN vaults.encrypted_by IS 'Which keychain encrypted the key in this row. Destroying that keychain makes every database of this vault permanently unreadable, which is what offboarding does. Unlike every other reference here it names something outside the database: it cannot be joined, and toro does not mint it. A deployment has to be able to tell which of these rows it can open at all rather than discovering it from a decryption failure, so this is compared before anything is decrypted — and it is a configured name rather than anything derived from the key, because a key service key keeps its name across rotations (ADR-0005).'"
-         "COMMENT ON COLUMN vaults.key_checksum IS 'A known canary encrypted under this key when it was made, so that whether this key still opens what it opened can be checked at any time — before the first layer is written under it, after the outer key is rotated, and as a readiness question. Kept because this design discards the plaintext it encrypts (ADR-0005).'"
          "COMMENT ON COLUMN database_attributes.metadata IS 'Notes about the database for the people who operate it.'"
          "COMMENT ON COLUMN database_tombstones.metadata IS 'Why it was closed, when that is worth keeping.'"
          "COMMENT ON TABLE vaults IS 'A key toro holds, encrypted by another, and the unit management and transfer are done in (ADR-0006). Every row is one data encryption key, and nothing else is stored here: the deployment''s own keychain is a configured name rather than a row (see encrypted_by). Named for what a row is rather than for the role it plays, because which key encrypts data and which encrypts a key is decided by what was encrypted rather than by the key itself (ADR-0005).'"

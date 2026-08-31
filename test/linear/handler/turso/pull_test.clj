@@ -60,23 +60,32 @@
           (.toByteArray output)))))
 
 (deftest pull-handler-accepts-a-byte-array-body
-  (let [context {:opaque "application-context"}]
-    (with-redefs [database/pull-for
-                  (fn [actual-context actual-database-id actual-options]
-                    (is (= context actual-context))
-                    (is (= "d-01M11GV3ER6E777ERMD0DK7CA1"
-                           actual-database-id))
-                    (is (= {:server-revision nil
-                            :client-revision nil
-                            :page-ids nil}
-                           actual-options))
-                    {:server-revision "r-current"
-                     :database-page-count 0
-                     :pages {}})]
-      (let [response ((pull/handler context)
-                      {:path-params {:id "d-01M11GV3ER6E777ERMD0DK7CA1"}
-                       :body (byte-array [0x1a 0x00])})]
-        (is (= 200 (:status response)))))))
+  (let [context {:database-reader
+                 (reify database/DatabaseReader
+                   (-open-read-session [_ _]
+                     (reify
+                       java.lang.AutoCloseable
+                       (close [_])
+                       database/DatabaseReadSession
+                       (-head [_]
+                         (reify
+                           database/Snapshot
+                           (-revision-id [_] "r-current")
+                           (-size [_] 0)
+                           (-fetch-pages-by-ids [_ _] {})))
+                       (-as-of [_ _] (throw (UnsupportedOperationException.)))
+                       (-changes-since [_ _ _] #{}))))
+                 :database-resolver
+                 (reify database/DatabaseResolver
+                   (-resolve-database [_ database-id]
+                     (is (= "d-01M11GV3ER6E777ERMD0DK7CA1" database-id))
+                     {:id database-id
+                      :display-name "Primary"
+                      :keychain ::keychain}))}
+        response ((pull/handler context)
+                  {:path-params {:id "d-01M11GV3ER6E777ERMD0DK7CA1"}
+                   :body (byte-array [0x1a 0x00])})]
+    (is (= 200 (:status response)))))
 
 (deftest pull-handler-rejects-a-body-with-an-unsupported-type
   (let [response ((pull/handler {}) {:body "not-an-input-stream"})]

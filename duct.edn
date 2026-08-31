@@ -44,4 +44,5 @@
    [["/health/ready" {:get :linear.handler.health/ready}]
     ["/health/ok" {:get :linear.handler.health/ok}]
     ["/d/:id/pull-updates" {:post :linear.handler.turso.pull/handler}]
-    ["/d/:id/v2/pipeline" {:post :linear.handler.turso.push/handler}]]}}}
+    ["/d/:id/v2/pipeline" {:post :linear.handler.turso.push/handler}]
+    ["/control/v1/vaults" {:post :linear.handler.vault/create}]]}}}

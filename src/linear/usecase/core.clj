@@ -14,7 +14,7 @@
    [::snapshot-reader ::database/snapshot-reader]
    [::revision-writer ::database/revision-writer]])
 
-(defn postgres-datasource
+(defn vault-datasource
   {:malli/schema [:-> ::context
                       :any]}
   [{::keys [postgres-datasource]}]
