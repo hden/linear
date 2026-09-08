@@ -89,9 +89,48 @@ Database retrieval is composed in one PostgreSQL transaction as:
 raw database -> composed vault
 ```
 
+The lifecycle invariant is that a database with `current_attributes` is not
+tombstoned. Normal retrieval joins its current attributes, so a closed identity
+whose pointer has been cleared is absent from this path. Both missing and closed
+identities produce `database-not-found`; they never become operable models.
+Vault composition resolves the configured master key and decrypts the data key
+before the database is used.
+
 The Labrador tags are stable internal contracts. Composition must not be moved
 into a PostgreSQL retriever merely because both facts currently come from the
 same database.
+
+## Database model and capabilities
+
+`linear.usecase.database` accepts application context and owns resolution,
+PostgreSQL read transactions, consistent-read scopes, and conflict retries.
+`linear.usecase.database.model` constructs the Database and implements evaluation,
+pull, and publication using capabilities attached to that model.
+
+A Database is an open map retaining its attributes and resolved `:vault`. Its
+capabilities use the qualified keys
+`:linear.usecase.database.model/consistent-view`,
+`:linear.usecase.database.model/evaluator`, and
+`:linear.usecase.database.model/revision-writable`. Malli checks the resolved
+database shape and only the capabilities required by each operation. Pull does
+not require an evaluator or writer.
+
+The `database.revisions` and `database.evaluator` namespaces define capabilities
+implemented by adapters. Revision view operations accept a `ConsistentView`
+directly; the model extracts it from the Database. Capabilities do not interpret
+the model's capability keys.
+
+Evaluation reads HEAD and verifies the resulting revision's parent. Pull selects
+the target revision, computes changed pages, and fetches pages before the view
+closes. Push then publishes through the attached writer after the consistent
+view and PostgreSQL read transaction have closed. Publication does not use the
+expired view. A revision conflict repeats database resolution, snapshot
+acquisition, and evaluation, with the existing bounded retry policy.
+
+PostgreSQL owns attributes, lifecycle, and Vault, without a `current_revision`
+column. SlateDB owns revisions, pages, and HEAD and publishes them atomically in
+its own transaction, rejecting stale parents. Push reads PostgreSQL and writes
+SlateDB; it does not introduce dual writes or a cross-store transaction.
 
 ## PostgreSQL loading
 
