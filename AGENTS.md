@@ -5,6 +5,7 @@ docs:
 
 * @docs/architecture.md
 * @bb.edn (frequently used commands)
+* plan/spec ドキュメントは `docs/plans/`・`docs/specs/` にローカル保存し、Git 管理しない
 
 tips:
 

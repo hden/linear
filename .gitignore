@@ -9,6 +9,8 @@
 .lsp/.cache
 .dir-locals.el
 docs/notes
+docs/plans
+docs/specs
 docs/superpowers
 .superpowers
 *.dylib
