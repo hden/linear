@@ -17,6 +17,7 @@
    [linear.usecase.database.revisions :as revisions]
    [linear.usecase.keychain :as keychain]
    [linear.usecase.transaction :as transaction]
+   [linear.usecase.vault :as vault]
    [next.jdbc :as jdbc]
    [taoensso.tempel :as tempel]))
 
@@ -446,3 +447,25 @@
       (is (false? @active?))
       (is (.isClosed ^java.sql.Connection @read-connection))
       (is (= {1 page} (:pages result))))))
+
+(deftest database-resolution-preserves-key-resolution-errors
+  (with-system [system (run {:keys [:duct.database/sql :duct.migrator/ragtime]})]
+    (let [datasource (:duct.database.sql/hikaricp system)
+          {:keys [database-id]} (resolved-database-fixture! datasource)]
+      (doseq [[configured expected]
+              [[nil {:reason ::vault/master-key-not-configured
+                     :master-key-id "dev-ephemeral"}]
+               [(crypto/keychain "another-key" (tempel/keychain))
+                {:reason ::vault/master-key-not-configured
+                 :master-key-id "dev-ephemeral"}]
+               [(crypto/keychain "dev-ephemeral" (tempel/keychain))
+                {:reason ::vault/vault-decryption-failed
+                 :vault-id (str "v-" (subs database-id 2))}]]]
+        (let [error (try
+                      (jdbc/with-transaction [tx datasource {:read-only true}]
+                        (database/resolve-by-id configured tx database-id))
+                      nil
+                      (catch Exception error error))
+              data (some #(when (:reason (ex-data %)) (ex-data %))
+                         (take-while some? (iterate ex-cause error)))]
+          (is (= (assoc expected ::anomaly/category ::anomaly/fault) data)))))))

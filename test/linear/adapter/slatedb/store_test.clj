@@ -186,3 +186,36 @@
                      (revisions/changes-since view "r-second" "r-missing"))))
       (finally
         (connection/close store)))))
+
+(deftest callback-failures-return-the-database-lease
+  (doseq [failure [(ex-info "Callback failed" {}) (AssertionError. "Callback failed")]]
+    (let [store (connection/open {:object-store-url "memory:///" :max-open-databases 1})
+          borrowed (atom nil)
+          returned (atom 0)
+          observed-store (assoc store
+                                :borrow-database
+                                (fn [id]
+                                  (let [raw ((:borrow-database store) id)]
+                                    (reset! borrowed raw)
+                                    raw))
+                                :return-database
+                                (fn [id raw]
+                                  (swap! returned inc)
+                                  ((:return-database store) id raw)))
+          database (database-record (crypto/keychain (tempel/keychain)))]
+      (try
+        (let [caught (try
+                       (revisions/read-consistently observed-store
+                         (fn [_] (throw failure))
+                         database)
+                       (catch Exception error error)
+                       (catch AssertionError error error))]
+          (is (identical? failure caught))
+          (is (= 1 @returned))
+          (when (= 1 @returned)
+            (with-open [lease (connection/database store "d-1")]
+              (is (some? lease)))))
+        (finally
+          (when (and @borrowed (zero? @returned))
+            ((:return-database store) "d-1" @borrowed))
+          (connection/close store))))))

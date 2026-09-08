@@ -24,20 +24,23 @@
   (-> (read-config (io/file "duct.edn"))
       (assoc-in [:vars 'port] {:type :int :default 3000})))
 
-(defn- seed-postgres! [datasource master-key keychain]
-  (let [ciphertext (keychain/encrypt master-key keychain
-                                     {:associated-data (.getBytes "v-e2e" "UTF-8")})]
+(defn- seed-postgres! [datasource master-key {database-id :id :keys [vault]}]
+  (let [vault-id (:id vault)
+        transaction-id (str "tx-" (random-uuid))
+        attributes-id (str "a-" (random-uuid))
+        ciphertext (keychain/encrypt master-key (:keychain vault)
+                                     {:associated-data (.getBytes ^String vault-id "UTF-8")})]
     (jdbc/with-transaction [tx datasource]
-      (jdbc/execute! tx ["INSERT INTO transactions (id) VALUES (?)" "tx-e2e"])
+      (jdbc/execute! tx ["INSERT INTO transactions (id) VALUES (?)" transaction-id])
       (jdbc/execute! tx
                      ["INSERT INTO vaults (id, ciphertext, encrypted_by, created_by) VALUES (?, ?, ?, ?)"
-                      "v-e2e" ciphertext "dev-ephemeral" "tx-e2e"])
+                      vault-id ciphertext "dev-ephemeral" transaction-id])
       (jdbc/execute! tx
                      ["INSERT INTO databases (id, encrypted_by, current_attributes) VALUES (?, ?, ?)"
-                      "d-e2e" "v-e2e" "a-e2e"])
+                      database-id vault-id attributes-id])
       (jdbc/execute! tx
                      ["INSERT INTO database_attributes (id, database_id, display_name, created_by) VALUES (?, ?, ?, ?)"
-                      "a-e2e" "d-e2e" "E2E" "tx-e2e"]))))
+                      attributes-id database-id "E2E" transaction-id]))))
 
 (defn- root-records [keychain pages]
   (let [revision     {:revision-id         "r-root"
@@ -84,13 +87,13 @@
     (try
       (let [master-key (:linear.adapter.crypto.tempel/master-key system)
             keychain   (crypto/keychain (tempel/keychain))
-            database   {:id "d-e2e"
+            database   {:id (str "d-e2e-" (random-uuid))
                         :display-name "E2E"
-                        :vault {:id "v-e2e"
+                        :vault {:id (str "v-e2e-" (random-uuid))
                                 :owner nil
                                 :created java.time.Instant/EPOCH
                                 :keychain keychain}}]
-        (seed-postgres! (:duct.database.sql/hikaricp system) master-key keychain)
+        (seed-postgres! (:duct.database.sql/hikaricp system) master-key database)
         (seed! (:linear.adapter.slatedb.store/store system)
                database
                (:pages (sqlite/snapshot (sqlite/sqlite-image))))

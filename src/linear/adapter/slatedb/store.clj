@@ -76,49 +76,16 @@
             (throw (revision-conflict "SlateDB publish conflict" {} error))
             (throw error)))))))
 
-(defn- close-snapshot-resources! [raw-snapshot leased-database]
-  (let [snapshot-error (try
-                         (ffi/close-snapshot! raw-snapshot)
-                         nil
-                         (catch Exception error
-                           error))
-        database-error (try
-                         (.close ^AutoCloseable leased-database)
-                         nil
-                         (catch Exception error
-                           error))]
-    (cond
-      snapshot-error (throw (add-suppressed! snapshot-error database-error))
-      database-error (throw database-error))))
-
 (defn- with-consistent-view [store database f]
-  (let [database-id      (:id database)
-        keychain         (get-in database [:vault :keychain])
-        leased-database (connection/database store database-id)
-        raw-snapshot    (try
-                          (connection/read-only-snapshot leased-database)
-                          (catch Exception error
-                            (try
-                              (.close ^AutoCloseable leased-database)
-                              (catch Exception close-error
-                                (add-suppressed! error close-error)))
-                            (throw error)))
-        read-values      #(ffi/await
-                            (ffi/read-snapshot-values raw-snapshot %))
-        view             (snapshot/consistent-view read-values keychain)
-        outcome          (try
-                           {:value (f view)}
-                           (catch Exception error
-                             {:error error}))]
-    (try
-      (close-snapshot-resources! raw-snapshot leased-database)
-      (catch Exception close-error
-        (if-let [error (:error outcome)]
-          (throw (add-suppressed! error close-error))
-          (throw close-error))))
-    (if-let [error (:error outcome)]
-      (throw error)
-      (:value outcome))))
+  (with-open [^AutoCloseable leased-database
+              (connection/database store (:id database))]
+    (let [raw-snapshot (connection/read-only-snapshot leased-database)]
+      (try
+        (let [read-values #(ffi/await (ffi/read-snapshot-values raw-snapshot %))
+              view (snapshot/consistent-view read-values (get-in database [:vault :keychain]))]
+          (f view))
+        (finally
+          (ffi/close-snapshot! raw-snapshot))))))
 
 (extend-type linear.adapter.slatedb.connection.Connection
   revisions/ConsistentReadable

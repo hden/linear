@@ -95,7 +95,7 @@ Reports contain commit SHA, changes, executed checks, and unresolved findings.
   The native preflight asserted sqlite-available? so conditional SQLite tests
   were enabled. No database volumes or user data were removed.
 - Instrumented focused verification: 13 tests, 73 assertions, zero failures or
-  errors. Final bb test: 122 tests, 380 assertions, zero failures.
+  errors. Final bb test after review fixes: 124 tests, 389 assertions, zero failures.
 - bb architecture, bb architecture:test (4 tests/4 assertions), bb lint,
   bb check, bb format:check (73 files), and bb e2e all exited zero.
 - bb check emitted one reflection warning in dependency urania/core.cljc:249;
@@ -105,3 +105,24 @@ Reports contain commit SHA, changes, executed checks, and unresolved findings.
   26 as above. Git has no configured active hooks in this checkout; the Codex
   stop hook inherits its caller's environment and must receive the same Java
   selection. No check or hook was disabled.
+
+## Final review corrections
+
+The whole-branch review found a read-resource leak when a callback throws an
+Error and missing acquisition tests for key errors. The resource regression test
+first failed with zero returned leases. Read scopes now use an outer with-open
+for the database lease and an inner try/finally for the raw snapshot. Per user
+clarification, cleanup does not broaden exception capture to Throwable or add
+manual exception bookkeeping. AGENTS.md records this reusable policy.
+
+Real PostgreSQL tests now check absent configured keys, mismatched key IDs, and
+decryption with the wrong same-ID key, preserving existing fault categories and
+reasons. The scoped strongest-model re-review marked both findings addressed.
+
+Repeated E2E execution exposed fixed fixture IDs colliding with prior E2E rows.
+Fixtures now use fresh IDs and derive encryption associated data and both store
+seed operations from the same Database map, preserving existing data. A separate
+focused review confirmed the cross-file ID and associated-data consistency.
+The Codex stop hook also ran with explicit Java 26 and returned continue=true.
+Two consecutive bb e2e runs with fresh fixture IDs exited zero against the
+existing PostgreSQL instance, without deleting prior rows.

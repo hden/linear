@@ -19,6 +19,8 @@ do's & dont's:
 * 副作用と目的としない関数には bang (!) をつけない
 * dynamic でもないのに earmuff (*) をつけない
 * `foo*` みたいに * を suffix につけない
+* リソース解放は `with-open` / `try` ... `finally` で保証する。解放のために `catch Throwable` を導入しない
+* `catch` は回復・変換などの処理が必要な例外だけに使う。仮想的な障害への対応で捕捉範囲や例外管理を増やさない（YAGNI）
 
 refs:
 
