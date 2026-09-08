@@ -1,30 +1,21 @@
 (ns linear.usecase.database
   (:require
-   [clojure.string :as string]
    [cognitect.anomalies :as anomaly]
    [diehard.core :as diehard]
    [labrador.core :as lab]
    [linear.spec :refer [spec-for]]
    [linear.usecase.core :as core]
-   [linear.usecase.database.core :as database-core]
-   [linear.usecase.database.evaluator :as evaluator]
+   [linear.usecase.database.model :as model]
    [linear.usecase.database.revisions :as revisions]
    [linear.usecase.transaction :as transaction]
    [linear.usecase.vault :as vault]
    [urania.core :as u]))
 
 (defmethod spec-for ::database-id [_]
-  [:and :string [:fn #(string/starts-with? % "d-")]])
+  ::model/database-id)
 
 (defmethod spec-for ::database [_]
-  [:map
-   [:id ::database-id]
-   [:display-name :string]
-   [:vault [:map
-            [:id :string]
-            [:owner [:maybe :string]]
-            [:created inst?]
-            [:keychain :any]]]])
+  ::model/database)
 
 (defn resolve-by-id [master-key tx database-id]
   (or (u/run!!
@@ -60,10 +51,11 @@
                                                database-id#)]
          (revisions/with-consistent-view
            [view# (core/consistent-readable context#) resolved-database#]
-           (let [~binding (database-core/database
+           (let [~binding (model/database
                             resolved-database#
-                            {:consistent-view view#
-                             :evaluator (core/evaluator context#)})]
+                            {::model/consistent-view view#
+                             ::model/evaluator (core/evaluator context#)
+                             ::model/revision-writable (core/revision-writable context#)})]
              ~@body))))))
 
 (defn- revision-conflict? [error]
@@ -76,14 +68,6 @@
    :backoff-ms [10 250 2.0]
    :jitter-factor 0.5})
 
-(defn- ensure-descends-from [parent revision]
-  (when-not (= parent (:parent revision))
-    (throw (ex-info "Evaluator revision does not descend from the snapshot"
-                    {::anomaly/category ::anomaly/fault
-                     :reason ::invalid-revision-parent
-                     :expected-parent parent
-                     :actual-parent (:parent revision)}))))
-
 (defn push!
   [context database-id command]
   (try
@@ -91,17 +75,8 @@
       (let [[database revision]
             (with-database [database context {:database-id database-id
                                               :read-only true}]
-              (let [snapshot (revisions/head database)
-                    parent (revisions/revision-id snapshot)
-                    revision (evaluator/evaluate
-                               (database-core/evaluator database)
-                               {:snapshot snapshot
-                                :command command})]
-                (ensure-descends-from parent revision)
-                [database revision]))]
-        (revisions/publish-next! (core/revision-writable context)
-                                 revision
-                                 database)))
+              [database (model/evaluate database command)])]
+        (model/publish-next! database revision)))
     (catch clojure.lang.ExceptionInfo error
       (if (revision-conflict? error)
         (throw (ex-info "Database push conflict"
@@ -115,26 +90,4 @@
   [context database-id pull-options]
   (with-database [database context {:database-id database-id
                                     :read-only true}]
-    (let [{:keys [client-revision server-revision page-ids]} pull-options
-          snapshot (if server-revision
-                     (revisions/as-of database server-revision)
-                     (revisions/head database))
-          target-revision (revisions/revision-id snapshot)
-          page-count (revisions/size snapshot)
-          changed-page-ids (cond
-                             (not client-revision)
-                             (set (range 1 (inc page-count)))
-
-                             (= client-revision target-revision)
-                             #{}
-
-                             :else
-                             (revisions/changes-since database
-                                                      target-revision
-                                                      client-revision))
-          selected-page-ids (if page-ids
-                              (set (filter page-ids changed-page-ids))
-                              changed-page-ids)]
-      {:server-revision target-revision
-       :database-page-count page-count
-       :pages (revisions/fetch-pages-by-ids snapshot {:ids selected-page-ids})})))
+    (model/pull database pull-options)))

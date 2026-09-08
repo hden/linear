@@ -1,8 +1,7 @@
 (ns linear.usecase.database.revisions
   (:require
    [clojure.string :as string]
-   [linear.spec :refer [spec-for]]
-   [linear.usecase.database.core :as database]))
+   [linear.spec :refer [spec-for]]))
 
 (defmethod spec-for ::revision-id [_]
   [:and :string [:fn #(string/starts-with? % "r-")]])
@@ -54,6 +53,9 @@
   (-as-of [view revision-id])
   (-changes-since [view target-revision-id client-revision-id]))
 
+(defmethod spec-for ::consistent-view [_]
+  [:fn #(satisfies? ConsistentView %)])
+
 (defprotocol ConsistentReadable
   (-read-consistently [reader f database]))
 
@@ -73,22 +75,20 @@
                         ~@body)
                       ~database))
 
-(defn- as-consistent-view [value]
-  (if (satisfies? ConsistentView value)
-    value
-    (database/consistent-view value)))
-
 (defn head
-  [value]
-  (-head (as-consistent-view value)))
+  {:malli/schema [:-> ::consistent-view ::snapshot]}
+  [view]
+  (-head view))
 
 (defn as-of
-  [value revision-id]
-  (-as-of (as-consistent-view value) revision-id))
+  {:malli/schema [:-> ::consistent-view ::revision-id ::snapshot]}
+  [view revision-id]
+  (-as-of view revision-id))
 
 (defn changes-since
-  [value target-revision-id client-revision-id]
-  (-changes-since (as-consistent-view value)
+  {:malli/schema [:-> ::consistent-view ::revision-id ::revision-id [:set ::page-id]]}
+  [view target-revision-id client-revision-id]
+  (-changes-since view
                   target-revision-id
                   client-revision-id))
 
