@@ -32,6 +32,15 @@
                    ["INSERT INTO database_attributes (id, database_id, display_name, created_by) VALUES (?, ?, ?, ?)"
                     attributes-id database-id "Primary" tx-id])))
 
+(defn- seed-database-tombstone! [datasource database-id tx-id]
+  (jdbc/with-transaction [tx datasource]
+    (jdbc/execute! tx
+                   ["UPDATE databases SET current_attributes = NULL WHERE id = ?"
+                    database-id])
+    (jdbc/execute! tx
+                   ["INSERT INTO database_tombstones (id, database_id, created_by) VALUES (?, ?, ?)"
+                    (str "t-" (random-uuid)) database-id tx-id])))
+
 (defn- seed-page! [store database-id keychain page]
   (let [revision     {:revision-id "r-root"
                       :parent nil
@@ -89,6 +98,29 @@
    ::core/master-key master-key
    ::core/revision-store store
    ::core/evaluator evaluator})
+
+(deftest resolve-by-id-treats-missing-and-tombstoned-databases-as-not-found
+  (with-system [system (run {:keys [:duct.database/sql
+                                    :duct.migrator/ragtime]})]
+    (let [datasource (:duct.database.sql/hikaricp system)
+          {:keys [database-id master-key]}
+          (resolved-database-fixture! datasource)
+          tx-id      (subs database-id 2)
+          missing-id (str "d-" (random-uuid))
+          resolve-error
+          (fn [id]
+            (try
+              (jdbc/with-transaction [tx datasource {:read-only true}]
+                (database/resolve-by-id master-key tx id))
+              nil
+              (catch clojure.lang.ExceptionInfo error
+                error)))]
+      (seed-database-tombstone! datasource database-id (str "tx-" tx-id))
+      (doseq [id [missing-id database-id]]
+        (let [error (resolve-error id)]
+          (is (= ::anomaly/not-found (-> error ex-data ::anomaly/category)))
+          (is (= ::database/database-not-found (-> error ex-data :reason)))
+          (is (= id (-> error ex-data :database-id))))))))
 
 (deftest pull-traverses-postgres-vault-decryption-and-slatedb
   (with-system [system (run {:keys [:duct.database/sql

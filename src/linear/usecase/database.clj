@@ -30,13 +30,15 @@
   (or (u/run!!
         (u/mapcat
           (fn [{:keys [vault-id] :as database}]
-            (u/mapcat
-              (fn [resolved-vault]
-                (lab/traverse
-                  (-> database
-                      (assoc :vault resolved-vault)
-                      (dissoc :vault-id))))
-              (vault/retriever vault-id)))
+            (if database
+              (u/mapcat
+                (fn [resolved-vault]
+                  (lab/traverse
+                    (-> database
+                        (assoc :vault resolved-vault)
+                        (dissoc :vault-id))))
+                (vault/retriever vault-id))
+              (u/value nil)))
           (lab/fetch ::database database-id))
         {:env {:tx tx
                :linear.usecase.core/master-key master-key}})
