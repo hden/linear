@@ -3,10 +3,10 @@
    [clojure.test :refer [deftest is]]
    [linear.adapter.sqlite.file :as file]
    [linear.adapter.sqlite.protocol :as sqlite]
-   [linear.usecase.database :as database]))
+   [linear.usecase.database.revisions :as revisions]))
 
 (defrecord Snapshot [pages]
-  database/Snapshot
+  revisions/Snapshot
   (-revision-id [_] "r-0")
   (-size [_] (count pages))
   (-fetch-pages-by-ids [_ {:keys [ids]}]
@@ -48,7 +48,7 @@
 
 (deftest reads-page-size-once-when-constructing-the-file
   (let [fetches (atom 0)
-        snapshot (reify database/Snapshot
+        snapshot (reify revisions/Snapshot
                    (-revision-id [_] "r-0")
                    (-size [_] 1)
                    (-fetch-pages-by-ids [_ _]

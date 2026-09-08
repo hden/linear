@@ -2,12 +2,13 @@
   (:require
    [clojure.test :refer [deftest is]]
    [cognitect.anomalies :as anomaly]
+   [linear.adapter.crypto.tempel :as crypto]
    [linear.adapter.slatedb.codec :as codec]
    [linear.adapter.slatedb.connection :as connection]
    [linear.adapter.slatedb.ffi :as ffi]
    [linear.adapter.slatedb.key :as key]
    [linear.adapter.slatedb.store]
-   [linear.usecase.database :as database]
+   [linear.usecase.database.revisions :as revisions]
    [taoensso.tempel :as tempel])
   (:import
    (java.util Arrays)))
@@ -15,7 +16,10 @@
 (defn- database-record [keychain]
   {:id "d-1"
    :display-name "Primary"
-   :keychain keychain})
+   :vault {:id "v-1"
+           :owner "owner-1"
+           :created #inst "2026-01-01"
+           :keychain keychain}})
 
 (defn- revision-records [keychain revision]
   (let [revision-id  (:revision-id revision)
@@ -44,10 +48,10 @@
       (finally
         (ffi/await (ffi/rollback-transaction transaction))))))
 
-(deftest failed-latest-snapshot-acquisition-returns-the-database-lease
+(deftest failed-consistent-view-acquisition-returns-the-database-lease
   (let [store    (connection/open {:object-store-url   "memory:///"
                                    :max-open-databases 1})
-        database (database-record (tempel/keychain))]
+        keychain (crypto/keychain (tempel/keychain))]
     (try
       (with-open [leased-database (connection/database store "d-1")
                   transaction     (connection/writable-transaction leased-database)]
@@ -55,7 +59,9 @@
           (ffi/write-values transaction [[(key/head) (byte-array [0])]]))
         (ffi/await (ffi/commit-transaction transaction)))
       (is (thrown? Exception
-                   (database/latest-snapshot store database)))
+                   (revisions/with-consistent-view
+                     [view store (database-record keychain)]
+                     (revisions/head view))))
       (with-open [leased-database (connection/database store "d-1")
                   transaction     (connection/writable-transaction leased-database)]
         (is (some? transaction)))
@@ -65,7 +71,7 @@
 (deftest publishes-revision-pages-and-head-atomically
   (let [store     (connection/open {:object-store-url   "memory:///"
                                     :max-open-databases 1})
-        keychain  (tempel/keychain)
+        keychain  (crypto/keychain (tempel/keychain))
         root      {:revision-id         "r-root"
                    :parent              nil
                    :database-page-count 1
@@ -78,7 +84,7 @@
     (try
       (seed! store keychain root)
       (is (= revision
-             (database/publish-next-revision! store database revision)))
+             (revisions/publish-next! store revision database)))
       (let [[head-value revision-value page-value]
             (read-records store [(key/head)
                                  (key/revision "r-next")
@@ -97,7 +103,7 @@
 (deftest stale-parent-publishes-no-records
   (let [store     (connection/open {:object-store-url   "memory:///"
                                     :max-open-databases 1})
-        keychain  (tempel/keychain)
+        keychain  (crypto/keychain (tempel/keychain))
         root      {:revision-id         "r-root"
                    :parent              nil
                    :database-page-count 1
@@ -110,11 +116,11 @@
     (try
       (seed! store keychain root)
       (let [error (try
-                    (database/publish-next-revision! store database stale)
+                    (revisions/publish-next! store stale database)
                     (catch clojure.lang.ExceptionInfo failure
                       failure))]
         (is (= ::anomaly/conflict (-> error ex-data ::anomaly/category)))
-        (is (= ::database/revision-conflict (-> error ex-data :reason))))
+        (is (= ::revisions/revision-conflict (-> error ex-data :reason))))
       (let [[head-value revision-value page-value]
             (read-records store [(key/head)
                                  (key/revision "r-stale")
@@ -129,7 +135,7 @@
 (deftest reads-the-latest-snapshot-through-the-domain-capability
   (let [store    (connection/open {:object-store-url   "memory:///"
                                    :max-open-databases 1})
-        keychain (tempel/keychain)
+        keychain (crypto/keychain (tempel/keychain))
         root     {:revision-id "r-root"
                   :parent nil
                   :database-page-count 1
@@ -137,19 +143,20 @@
         database (database-record keychain)]
     (try
       (seed! store keychain root)
-      (with-open [snapshot (database/latest-snapshot store database)]
-        (is (= "r-root" (database/revision-id snapshot)))
-        (is (= 1 (database/size snapshot)))
-        (is (Arrays/equals
-              (byte-array [7])
-              (get (database/fetch-pages-by-ids snapshot {:ids #{1}}) 1))))
+      (revisions/with-consistent-view [view store database]
+        (let [snapshot (revisions/head view)]
+          (is (= "r-root" (revisions/revision-id snapshot)))
+          (is (= 1 (revisions/size snapshot)))
+          (is (Arrays/equals
+                (byte-array [7])
+                (get (revisions/fetch-pages-by-ids snapshot {:ids #{1}}) 1)))))
       (finally
         (connection/close store)))))
 
 (deftest reads-as-of-and-changes-since-through-one-domain-capability
   (let [store     (connection/open {:object-store-url   "memory:///"
                                     :max-open-databases 1})
-        keychain  (tempel/keychain)
+        keychain  (crypto/keychain (tempel/keychain))
         root      {:revision-id         "r-root"
                    :parent              nil
                    :database-page-count 1
@@ -166,16 +173,16 @@
     (try
       (seed! store keychain root)
       (is (= first
-             (database/publish-next-revision! store database first)))
+             (revisions/publish-next! store first database)))
       (is (= second
-             (database/publish-next-revision! store database second)))
-      (with-open [session (database/open-read-session store database)]
-        (let [as-of (database/as-of session "r-first")]
-          (is (= "r-first" (database/revision-id as-of)))
-          (is (= 2 (database/size as-of))))
+             (revisions/publish-next! store second database)))
+      (revisions/with-consistent-view [view store database]
+        (let [as-of (revisions/as-of view "r-first")]
+          (is (= "r-first" (revisions/revision-id as-of)))
+          (is (= 2 (revisions/size as-of))))
         (is (= #{1 2}
-               (database/changes-since session "r-second" "r-root")))
+               (revisions/changes-since view "r-second" "r-root")))
         (is (thrown? clojure.lang.ExceptionInfo
-                     (database/changes-since session "r-second" "r-missing"))))
+                     (revisions/changes-since view "r-second" "r-missing"))))
       (finally
         (connection/close store)))))

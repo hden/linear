@@ -7,7 +7,7 @@
    [linear.adapter.slatedb.ffi :as ffi]
    [linear.adapter.slatedb.key :as key]
    [linear.adapter.slatedb.snapshot :as snapshot]
-   [linear.usecase.database :as database])
+   [linear.usecase.database.revisions :as revisions])
   (:import
    (io.slatedb.uniffi DbTransaction)
    (java.lang AutoCloseable)))
@@ -38,7 +38,7 @@
 (defn- revision-conflict [message data cause]
   (ex-info message
            (merge {::anomaly/category ::anomaly/conflict
-                   :reason ::database/revision-conflict}
+                   :reason ::revisions/revision-conflict}
                   data)
            cause))
 
@@ -50,29 +50,31 @@
               :actual-parent head}
              nil))))
 
-(defn- publish! [store database revision]
-  (with-open [^AutoCloseable leased-database
-              (connection/database store (:id database))
-              ^DbTransaction transaction
-              (connection/writable-transaction leased-database)]
-    (try
-      (let [read-values #(ffi/await
-                           (ffi/read-transaction-values transaction %))
-            head        (snapshot/head-revision-id read-values)]
-        (ensure-current-parent! head revision)
-        (ffi/await
-          (ffi/write-values transaction
-                            (revision-records (:keychain database) revision)))
-        (ffi/await (ffi/commit-transaction transaction))
-        revision)
-      (catch Exception error
-        (try
-          (ffi/await (ffi/rollback-transaction transaction))
-          (catch Exception rollback-error
-            (add-suppressed! error rollback-error)))
-        (if (commit-conflict? error)
-          (throw (revision-conflict "SlateDB publish conflict" {} error))
-          (throw error))))))
+(defn- publish! [store revision database]
+  (let [database-id (:id database)
+        keychain    (get-in database [:vault :keychain])]
+    (with-open [^AutoCloseable leased-database
+                (connection/database store database-id)
+                ^DbTransaction transaction
+                (connection/writable-transaction leased-database)]
+      (try
+        (let [read-values #(ffi/await
+                             (ffi/read-transaction-values transaction %))
+              head        (snapshot/head-revision-id read-values)]
+          (ensure-current-parent! head revision)
+          (ffi/await
+            (ffi/write-values transaction
+                              (revision-records keychain revision)))
+          (ffi/await (ffi/commit-transaction transaction))
+          revision)
+        (catch Exception error
+          (try
+            (ffi/await (ffi/rollback-transaction transaction))
+            (catch Exception rollback-error
+              (add-suppressed! error rollback-error)))
+          (if (commit-conflict? error)
+            (throw (revision-conflict "SlateDB publish conflict" {} error))
+            (throw error)))))))
 
 (defn- close-snapshot-resources! [raw-snapshot leased-database]
   (let [snapshot-error (try
@@ -89,8 +91,10 @@
       snapshot-error (throw (add-suppressed! snapshot-error database-error))
       database-error (throw database-error))))
 
-(defn- latest-snapshot [store database]
-  (let [leased-database (connection/database store (:id database))
+(defn- with-consistent-view [store database f]
+  (let [database-id      (:id database)
+        keychain         (get-in database [:vault :keychain])
+        leased-database (connection/database store database-id)
         raw-snapshot    (try
                           (connection/read-only-snapshot leased-database)
                           (catch Exception error
@@ -98,61 +102,32 @@
                               (.close ^AutoCloseable leased-database)
                               (catch Exception close-error
                                 (add-suppressed! error close-error)))
-                            (throw error)))]
+                            (throw error)))
+        read-values      #(ffi/await
+                            (ffi/read-snapshot-values raw-snapshot %))
+        view             (snapshot/consistent-view read-values keychain)
+        outcome          (try
+                           {:value (f view)}
+                           (catch Exception error
+                             {:error error}))]
     (try
-      (let [read-values   #(ffi/await
-                             (ffi/read-snapshot-values raw-snapshot %))
-            revision-id  (snapshot/head-revision-id read-values)
-            close!       #(close-snapshot-resources! raw-snapshot
-                                                     leased-database)]
-        (snapshot/snapshot read-values
-                           revision-id
-                           (:keychain database)
-                           close!))
-      (catch Exception error
-        (try
-          (close-snapshot-resources! raw-snapshot leased-database)
-          (catch Exception close-error
-            (add-suppressed! error close-error)))
-        (throw error)))))
-
-(defn- read-session [store database]
-  (let [leased-database (connection/database store (:id database))
-        raw-snapshot    (try
-                          (connection/read-only-snapshot leased-database)
-                          (catch Exception error
-                            (try
-                              (.close ^AutoCloseable leased-database)
-                              (catch Exception close-error
-                                (add-suppressed! error close-error)))
-                            (throw error)))]
-    (try
-      (let [read-values #(ffi/await
-                           (ffi/read-snapshot-values raw-snapshot %))
-            close!       #(close-snapshot-resources! raw-snapshot
-                                                     leased-database)]
-        (snapshot/read-session read-values
-                               (:keychain database)
-                               close!))
-      (catch Exception error
-        (try
-          (close-snapshot-resources! raw-snapshot leased-database)
-          (catch Exception close-error
-            (add-suppressed! error close-error)))
-        (throw error)))))
+      (close-snapshot-resources! raw-snapshot leased-database)
+      (catch Exception close-error
+        (if-let [error (:error outcome)]
+          (throw (add-suppressed! error close-error))
+          (throw close-error))))
+    (if-let [error (:error outcome)]
+      (throw error)
+      (:value outcome))))
 
 (extend-type linear.adapter.slatedb.connection.Connection
-  database/SnapshotReader
-  (-latest-snapshot [store database]
-    (latest-snapshot store database))
+  revisions/ConsistentReadable
+  (-read-consistently [store f database]
+    (with-consistent-view store database f))
 
-  database/DatabaseReader
-  (-open-read-session [store database]
-    (read-session store database))
-
-  database/RevisionWriter
-  (-publish-next-revision! [store database revision]
-    (publish! store database revision)))
+  revisions/RevisionWritable
+  (-publish-next! [store revision database]
+    (publish! store revision database)))
 
 (defmethod integrant/init-key :linear.adapter.slatedb.store/store
   [_ options]

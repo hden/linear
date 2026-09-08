@@ -2,38 +2,26 @@
   (:require
    [clojure.test :refer [deftest is]]
    [linear.handler.health :as health]
-   [linear.protocol :as protocol]
-   [linear.usecase.database :as database]
+   [linear.usecase.healthcheck :as healthcheck]
    [ring.mock.request :refer [request]]))
 
-(defn- checkable-evaluator [ready? ok?]
+(defn- checkable [ready? ok?]
   (reify
-    protocol/Checkable
+    healthcheck/Checkable
     (-ready? [_] ready?)
-    (-ok? [_] ok?)
-    database/Evaluator
-    (-evaluate [_ _] {})))
-
-(defn- database-store []
-  (reify
-    database/SnapshotReader
-    (-latest-snapshot [_ _] nil)
-    database/RevisionWriter
-    (-publish-next-revision! [_ _ revision] revision)))
+    (-ok? [_] ok?)))
 
 (def ^:private healthy-context
-  {:linear.usecase.core/postgres-datasource (checkable-evaluator true true)
-   :linear.usecase.core/database-evaluator (checkable-evaluator true true)
-   :linear.usecase.core/snapshot-reader (database-store)
-   :linear.usecase.core/revision-writer (database-store)})
+  {:linear.usecase.core/database (checkable true true)
+   :linear.usecase.core/evaluator (checkable true true)})
 
 (deftest readiness-handler
   (let [f (health/ready healthy-context)]
     (is (= {:status 200 :body {:status "ready"}}
            (f (request :get "/health/ready")))))
   (let [context (assoc healthy-context
-                       :linear.usecase.core/postgres-datasource
-                       (checkable-evaluator false true))]
+                       :linear.usecase.core/database
+                       (checkable false true))]
     (is (= {:status 503 :body {:status "not ready"}}
            ((health/ready context) (request :get "/health/ready"))))))
 
@@ -41,7 +29,7 @@
   (is (= {:status 200 :body {:status "ok"}}
          ((health/ok healthy-context) (request :get "/health/ok"))))
   (let [context (assoc healthy-context
-                       :linear.usecase.core/database-evaluator
-                       (checkable-evaluator true false))]
+                       :linear.usecase.core/evaluator
+                       (checkable true false))]
     (is (= {:status 500 :body {:status "not ok"}}
            ((health/ok context) (request :get "/health/ok"))))))

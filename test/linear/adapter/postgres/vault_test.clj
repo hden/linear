@@ -2,36 +2,45 @@
   (:require
    [clojure.test :refer [deftest is]]
    [duct.test :refer [with-system]]
-   [linear.adapter.postgres.vault]
-   [linear.protocol :as protocol]
+   [linear.adapter.crypto.tempel :as crypto]
+   [linear.adapter.postgres]
    [linear.test :refer [run]]
    [linear.usecase.core :as core]
-   [linear.usecase.database :as database]
-   [linear.usecase.vault :as vault]))
+   [linear.usecase.database.evaluator :as evaluator]
+   [linear.usecase.database.revisions :as revisions]
+   [linear.usecase.healthcheck :as healthcheck]
+   [linear.usecase.keychain :as keychain]
+   [linear.usecase.vault :as vault]
+   [next.jdbc :as jdbc]
+   [taoensso.tempel :as tempel]))
 
 (defn- checkable-evaluator []
   (reify
-    protocol/Checkable
+    healthcheck/Checkable
     (-ready? [_] true)
     (-ok? [_] true)
-    database/Evaluator
+    evaluator/Evaluator
     (-evaluate [_ _] nil)))
 
 (defn- database-store []
   (reify
-    database/SnapshotReader
-    (-latest-snapshot [_ _] nil)
-    database/RevisionWriter
-    (-publish-next-revision! [_ _ revision] revision)))
+    revisions/ConsistentReadable
+    (-read-consistently [_ f _] (f nil))
+    revisions/RevisionWritable
+    (-publish-next! [_ revision _] revision)))
+
+(defn- context [datasource]
+  {::core/database       datasource
+   ::core/evaluator      (checkable-evaluator)
+   ::core/revision-store (database-store)
+   ::core/keychain       crypto/new-keychain
+   ::core/master-key     (crypto/keychain "dev-ephemeral" (tempel/keychain))})
 
 (deftest vault-creation-is-encrypted-and-idempotent
   (with-system [sys (run {:keys [:duct.database/sql
                                  :duct.migrator/ragtime]})]
-    (let [context {::core/postgres-datasource
-                   (:duct.database.sql/hikaricp sys)
-                   ::core/database-evaluator (checkable-evaluator)
-                   ::core/snapshot-reader    (database-store)
-                   ::core/revision-writer    (database-store)}
+    (let [datasource (:duct.database.sql/hikaricp sys)
+          context (context datasource)
           key     (str "vault-test-" (random-uuid))
           created (vault/create! context
                     {:data [{:owner "owner-1"}]
@@ -44,7 +53,17 @@
              (set (keys replayed))))
       (is (= (first (keys created))
              (:id vault)))
+      (is (= "owner-1" (:owner vault)))
       (is (contains? vault :keychain))
       (is (not (contains? vault :ciphertext)))
-      (is (= created
-             (vault/get-by-ids context {:ids (vec (keys created))}))))))
+      (is (not (contains? vault :encrypted-by)))
+      (let [stored (first (jdbc/execute! datasource
+                            ["SELECT ciphertext, encrypted_by FROM vaults WHERE id = ?"
+                             (:id vault)]))]
+        (is (bytes? (:vaults/ciphertext stored)))
+        (is (= (keychain/id (core/master-key context))
+               (:vaults/encrypted_by stored))))
+      (let [fetched (vault/get-by-ids context {:ids (vec (keys created))})]
+        (is (= (update-vals created #(dissoc % :keychain))
+               (update-vals fetched #(dissoc % :keychain))))
+        (is (every? (comp keychain/keychain? :keychain) (vals fetched)))))))

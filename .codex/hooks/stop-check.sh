@@ -18,8 +18,8 @@ if grep -RIn --binary-files=without-match \
   exit 0
 fi
 
-if ! bb lint >&2 || ! bb check >&2 || ! bb format:check >&2; then
-  printf '%s\n' '{"decision":"block","reason":"Fix `bb lint`, `bb check`, and `bb format:check` before stopping."}'
+if ! bb architecture >&2 || ! bb lint >&2 || ! bb check >&2 || ! bb format:check >&2; then
+  printf '%s\n' '{"decision":"block","reason":"Fix `bb architecture`, `bb lint`, `bb check`, and `bb format:check` before stopping."}'
   exit 0
 fi
 

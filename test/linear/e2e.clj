@@ -2,13 +2,16 @@
   (:require
    [clojure.java.io :as io]
    [integrant.core :as integrant]
+   [linear.adapter.crypto.tempel :as crypto]
    [linear.adapter.slatedb.codec :as codec]
    [linear.adapter.slatedb.connection :as connection]
    [linear.adapter.slatedb.ffi :as ffi]
    [linear.adapter.slatedb.key :as key]
    [linear.adapter.sqlite.test-support :as sqlite]
-   [linear.handler.turso.common :as common]
-   [linear.test :as test])
+   [linear.test :as test]
+   [linear.usecase.keychain :as keychain]
+   [next.jdbc :as jdbc]
+   [taoensso.tempel :as tempel])
   (:import
    (org.eclipse.jetty.server NetworkConnector)))
 
@@ -19,10 +22,22 @@
 
 (defn- config []
   (-> (read-config (io/file "duct.edn"))
-      (assoc-in [:vars 'port] {:type :int :default 3000})
-      (update-in [:system :duct.module/web :handler-opts]
-                 dissoc
-                 :linear.usecase.core/postgres-datasource)))
+      (assoc-in [:vars 'port] {:type :int :default 3000})))
+
+(defn- seed-postgres! [datasource master-key keychain]
+  (let [ciphertext (keychain/encrypt master-key keychain
+                                     {:associated-data (.getBytes "v-e2e" "UTF-8")})]
+    (jdbc/with-transaction [tx datasource]
+      (jdbc/execute! tx ["INSERT INTO transactions (id) VALUES (?)" "tx-e2e"])
+      (jdbc/execute! tx
+                     ["INSERT INTO vaults (id, ciphertext, encrypted_by, created_by) VALUES (?, ?, ?, ?)"
+                      "v-e2e" ciphertext "dev-ephemeral" "tx-e2e"])
+      (jdbc/execute! tx
+                     ["INSERT INTO databases (id, encrypted_by, current_attributes) VALUES (?, ?, ?)"
+                      "d-e2e" "v-e2e" "a-e2e"])
+      (jdbc/execute! tx
+                     ["INSERT INTO database_attributes (id, database_id, display_name, created_by) VALUES (?, ?, ?, ?)"
+                      "a-e2e" "d-e2e" "E2E" "tx-e2e"]))))
 
 (defn- root-records [keychain pages]
   (let [revision     {:revision-id         "r-root"
@@ -43,15 +58,15 @@
 (defn- seed! [store database pages]
   (with-open [leased-database (connection/database store (:id database))
               transaction     (connection/writable-transaction leased-database)]
-    (ffi/await (ffi/write-values transaction (root-records (:keychain database) pages)))
+    (ffi/await (ffi/write-values transaction (root-records (get-in database [:vault :keychain]) pages)))
     (ffi/await (ffi/commit-transaction transaction))))
 
-(defn- server-url [system]
+(defn- server-url [system database-id]
   (let [server    (:server (:duct.server.http/jetty system))
         connector (aget (.getConnectors server) 0)
         port      (.getLocalPort ^NetworkConnector connector)]
     (str "http://127.0.0.1:" port "/d/"
-         (:id (common/database)))))
+         database-id)))
 
 (defn- run-client! [url]
   (let [process (-> (ProcessBuilder. ["npm" "run" "e2e" "--" url])
@@ -65,12 +80,20 @@
   (let [system (test/run {:config   (config)
                           :keys     #{:duct.server.http/jetty}
                           :profiles [:test :main]
-                          :vars     {'port 0}})
-        database (common/database)]
+                          :vars     {'port 0}})]
     (try
-      (seed! (:linear.adapter.slatedb.store/store system)
-             database
-             (:pages (sqlite/snapshot (sqlite/sqlite-image))))
-      (run-client! (server-url system))
+      (let [master-key (:linear.adapter.crypto.tempel/master-key system)
+            keychain   (crypto/keychain (tempel/keychain))
+            database   {:id "d-e2e"
+                        :display-name "E2E"
+                        :vault {:id "v-e2e"
+                                :owner nil
+                                :created java.time.Instant/EPOCH
+                                :keychain keychain}}]
+        (seed-postgres! (:duct.database.sql/hikaricp system) master-key keychain)
+        (seed! (:linear.adapter.slatedb.store/store system)
+               database
+               (:pages (sqlite/snapshot (sqlite/sqlite-image))))
+        (run-client! (server-url system (:id database))))
       (finally
         (integrant/halt! system)))))

@@ -2,7 +2,7 @@
   (:require
    [clojure.java.io :as io]
    [clojure.string :as string]
-   [linear.usecase.database :as database])
+   [linear.usecase.database.revisions :as revisions])
   (:import
    (java.nio.file Files)
    (java.sql DriverManager)
@@ -16,7 +16,7 @@
                                       java.io.File/pathSeparator))))))
 
 (defrecord Snapshot [revision-id pages]
-  database/Snapshot
+  revisions/Snapshot
   (-revision-id [_]
     revision-id)
   (-size [_]

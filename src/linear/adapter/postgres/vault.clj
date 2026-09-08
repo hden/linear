@@ -1,40 +1,18 @@
 (ns linear.adapter.postgres.vault
   (:require
-   [diehard.core :refer [with-retry with-timeout]]
    [labrador.core :as lab]
    [linear.adapter.postgres.core :as core]
-   [linear.usecase.vault :as vault]
-   [next.jdbc :as jdbc]
-   [taoensso.tempel :as tempel])
+   [linear.usecase.vault :as vault])
   (:import
-   (java.sql Connection)
-   (javax.sql DataSource)))
-
-;; TODO: switch to a KMS key identified by the vaults.encrypted_by value.
-(defonce master-kek (delay (tempel/keychain)))
-(def ^:private encrypted-by "placeholder")
-
-(defn- encrypt-keychain []
-  (tempel/encrypt-keychain
-    (tempel/keychain)
-    {:key-sym @master-kek}))
-
-(extend-protocol vault/Transactable
-  DataSource
-  (-transact [datasource f {:keys [read-only timeout-ms]
-                            :or {timeout-ms 2000}}]
-    (with-timeout {:timeout-ms timeout-ms :interrupt? true}
-      (with-retry core/default-retry-policy
-        (jdbc/with-transaction [tx datasource {:isolation :serializable :read-only read-only}]
-          (f tx))))))
+   (java.sql Connection)))
 
 (extend-protocol vault/Database
   Connection
   (-create! [tx {:keys [data idempotency-key]}]
     (let [txid (core/transaction-id)
           vaults (into []
-                       (map (fn [{:keys [id owner]}]
-                              [id owner txid (encrypt-keychain) encrypted-by]))
+                       (map (fn [{:keys [id owner ciphertext encrypted-by]}]
+                              [id owner txid ciphertext encrypted-by]))
                        data)]
       (try
         (let [result (core/transact!
@@ -65,22 +43,13 @@
             (throw ex)))))))
 
 (lab/defretriever vault
-  {:tag         :linear.usecase.vault/vault
-   :decorate-fn (fn [{:keys [ciphertext] :as vault}]
-                  (let [keychain (tempel/keychain-decrypt
-                                   ciphertext
-                                   {:key-sym @master-kek})]
-                    (if keychain
-                      (-> vault
-                          (assoc :keychain keychain)
-                          (dissoc :ciphertext))
-                      (throw (ex-info "Vault keychain could not be decrypted"
-                                      {:cognitect.anomalies/category :cognitect.anomalies/fault
-                                       :reason ::vault-decryption-failed})))))}
+  {:tag :linear.usecase.vault/vault}
   [{:keys [tx]} ids]
   (core/query tx {:statement {:select   [[:v.id :id]
+                                         [:v.owner :owner]
                                          [:v.created-at :created]
-                                         [:v.ciphertext :ciphertext]]
+                                         [:v.ciphertext :ciphertext]
+                                         [:v.encrypted-by :encrypted-by]]
                               :from     [[:vaults :v]]
                               :where    [:in :v.id ids]
                               :order-by [[:v.id :asc]]}

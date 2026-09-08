@@ -1,6 +1,6 @@
 (ns linear.adapter.slatedb.key
   (:require
-   [linear.usecase.database :as database])
+   [linear.usecase.database.revisions :as revisions])
   (:import
    (java.nio.charset StandardCharsets)
    (java.util Base64)))
@@ -18,11 +18,11 @@
   (utf8 "head"))
 
 (defn revision
-  {:malli/schema [:-> ::database/revision-id [:fn bytes?]]}
+  {:malli/schema [:-> ::revisions/revision-id [:fn bytes?]]}
   [revision-id]
   (utf8 (str "revision/" revision-id)))
 
 (defn page
-  {:malli/schema [:-> ::database/page-id [:fn bytes?]]}
+  {:malli/schema [:-> ::revisions/page-id [:fn bytes?]]}
   [page-id]
   (utf8 (str "page/" (page-component page-id))))

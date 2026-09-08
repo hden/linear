@@ -7,10 +7,10 @@
 
 (deftest source-registry-resolves-domain-schemas
   (is (true? (m/validate
-               :linear.usecase.database/page-id
+               :linear.usecase.database.revisions/page-id
                1
                {:registry spec/registry})))
   (is (false? (m/validate
-                :linear.usecase.database/page-id
+                :linear.usecase.database.revisions/page-id
                 0
                 {:registry spec/registry}))))

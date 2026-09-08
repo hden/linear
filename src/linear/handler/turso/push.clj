@@ -4,6 +4,7 @@
    [integrant.core :as ig]
    [linear.handler.turso.hrana :as hrana]
    [linear.usecase.database :as database]
+   [linear.usecase.database.evaluator :as evaluator]
    [malli.core :as m]
    [malli.transform :as mt])
   (:import
@@ -134,7 +135,7 @@
                    [:body-size nat-int?]
                    [:batch :map]]
                   [:map
-                   [:command ::database/push-command]
+                   [:command ::evaluator/push-command]
                    [:wire-indexes [:vector nat-int?]]]]}
   [{:keys [body-size batch]}]
   (let [steps (:steps batch)]
@@ -219,9 +220,9 @@
         (parse-command {:body-size (request-content-length request)
                         :batch batch})]
     (try
-      (database/push-for! context
-                          (:id (:path-params request))
-                          command)
+      (database/push! context
+                      (:id (:path-params request))
+                      command)
       (hrana/batch-response (count (:steps batch)))
       (catch Exception error
         (if (hrana/statement-error? error)

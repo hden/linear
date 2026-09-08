@@ -8,16 +8,17 @@
    [linear.adapter.sqlite.core :refer [fault]]
    [linear.adapter.sqlite.evaluation :as evaluation]
    [linear.adapter.sqlite.vfs :as vfs]
-   [linear.protocol :as protocol]
    [linear.spec :refer [spec-for]]
-   [linear.usecase.database :as database])
+   [linear.usecase.database.evaluator :as evaluator]
+   [linear.usecase.database.revisions :as revisions]
+   [linear.usecase.healthcheck :as healthcheck])
   (:import
    (dev.failsafe TimeoutExceededException)))
 
 (def ^:private ^:const default-shutdown-timeout-ms 10000)
 
 (defmethod spec-for ::evaluator [_]
-  [:fn #(satisfies? database/Evaluator %)])
+  [:fn #(satisfies? evaluator/Evaluator %)])
 
 (defn- call-sqlite [invocation context f]
   (try
@@ -44,7 +45,7 @@
 (defn- revision [snapshot delta]
   (assoc delta
          :revision-id (str "r-" (ulid))
-         :parent (database/revision-id snapshot)))
+         :parent (revisions/revision-id snapshot)))
 
 (defn- execute-command! [invocation sqlite-database command]
   (execute! invocation sqlite-database {:operation :begin} "BEGIN IMMEDIATE")
@@ -88,13 +89,13 @@
       (deliver signal true))))
 
 (defrecord ^:private Evaluator [resources state shutdown-timeout-ms]
-  protocol/Checkable
+  healthcheck/Checkable
   (-ready? [_]
     (= :ready (:status @state)))
   (-ok? [_]
     (and (= :ok (:liveness @state))
          (vfs/ok? resources)))
-  database/Evaluator
+  evaluator/Evaluator
   (-evaluate [_ {:keys [snapshot command]}]
     (begin-evaluation! state)
     (try

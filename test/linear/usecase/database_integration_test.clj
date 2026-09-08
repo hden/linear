@@ -1,7 +1,9 @@
 (ns linear.usecase.database-integration-test
   (:require
    [clojure.test :refer [deftest is]]
-   [integrant.core :as integrant]
+   [duct.test :refer [with-system]]
+   [linear.adapter.crypto.tempel :as crypto]
+   [linear.adapter.postgres]
    [linear.adapter.slatedb.codec :as codec]
    [linear.adapter.slatedb.connection :as connection]
    [linear.adapter.slatedb.ffi :as ffi]
@@ -9,7 +11,11 @@
    [linear.adapter.slatedb.store]
    [linear.adapter.sqlite.evaluator]
    [linear.adapter.sqlite.test-support :as support]
+   [linear.test :refer [run]]
+   [linear.usecase.core :as core]
    [linear.usecase.database :as database]
+   [linear.usecase.keychain :as keychain]
+   [next.jdbc :as jdbc]
    [taoensso.tempel :as tempel])
   (:import
    (java.nio.file Files)
@@ -60,36 +66,63 @@
             [[(key/head)
               (codec/encode-head {:revision-id (:revision-id revision)})]]))))
 
-(defn- seed! [store keychain pages]
-  (with-open [database    (connection/database store "d-push-integration")
+(defn- seed! [store database-id keychain pages]
+  (with-open [database    (connection/database store database-id)
               transaction (connection/writable-transaction database)]
     (ffi/await (ffi/write-values transaction (root-records keychain pages)))
     (ffi/await (ffi/commit-transaction transaction))))
 
+(defn- seed-database! [datasource master-key keychain]
+  (let [suffix        (random-uuid)
+        database-id   (str "d-" suffix)
+        vault-id      (str "v-" suffix)
+        transaction-id (str "tx-" suffix)
+        attributes-id (str "a-" suffix)]
+    (jdbc/with-transaction [tx datasource]
+      (jdbc/execute! tx ["INSERT INTO transactions (id) VALUES (?)" transaction-id])
+      (jdbc/execute! tx
+                     ["INSERT INTO vaults (id, owner, ciphertext, encrypted_by, created_by) VALUES (?, ?, ?, ?, ?)"
+                      vault-id
+                      "owner-1"
+                      (keychain/encrypt master-key keychain
+                                        {:associated-data (.getBytes ^String vault-id "UTF-8")})
+                      "dev-ephemeral"
+                      transaction-id])
+      (jdbc/execute! tx
+                     ["INSERT INTO databases (id, encrypted_by, current_attributes) VALUES (?, ?, ?)"
+                      database-id vault-id attributes-id])
+      (jdbc/execute! tx
+                     ["INSERT INTO database_attributes (id, database_id, display_name, created_by) VALUES (?, ?, ?, ?)"
+                      attributes-id database-id "Primary" transaction-id]))
+    database-id))
+
 (deftest pushes-through-domain-sqlite-and-slatedb-boundaries
   (when (support/sqlite-available?)
-    (let [keychain  (tempel/keychain)
-          store     (connection/open {:object-store-url   "memory:///"
-                                      :max-open-databases 1})
-          evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator {})
-          capabilities {:snapshot-reader store
-                        :revision-writer store
-                        :evaluator evaluator}
-          database     {:id           "d-push-integration"
-                        :display-name "Primary"
-                        :keychain     keychain}]
-      (try
-        (seed! store keychain (sqlite-pages))
+    (with-system [system (run {:keys [:duct.database/sql
+                                      :duct.migrator/ragtime
+                                      :linear.adapter.slatedb.store/store
+                                      :linear.adapter.sqlite.evaluator/evaluator]})]
+      (let [datasource (:duct.database.sql/hikaricp system)
+            store      (:linear.adapter.slatedb.store/store system)
+            evaluator  (:linear.adapter.sqlite.evaluator/evaluator system)
+            master-key (crypto/keychain "dev-ephemeral" (tempel/keychain))
+            keychain   (crypto/new-keychain)
+            database-id (seed-database! datasource master-key keychain)
+            context    {::core/database datasource
+                        ::core/master-key master-key
+                        ::core/revision-store store
+                        ::core/evaluator evaluator}]
+        (seed! store database-id keychain (sqlite-pages))
         (let [first-revision
               (database/push!
-                capabilities
-                database
+                context
+                database-id
                 {:statements [{:sql        "UPDATE t SET value = ? WHERE id = 1"
                                :parameters ["first"]}]})
               second-revision
               (database/push!
-                capabilities
-                database
+                context
+                database-id
                 {:statements
                  [{:sql       (str "SELECT CASE WHEN value = ? THEN 1 "
                                 "ELSE abs(-9223372036854775808) END FROM t WHERE id = 1")
@@ -97,7 +130,4 @@
                   {:sql        "UPDATE t SET value = ? WHERE id = 1"
                    :parameters ["second"]}]})]
           (is (= "r-root" (:parent first-revision)))
-          (is (= (:revision-id first-revision) (:parent second-revision))))
-        (finally
-          (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator)
-          (connection/close store))))))
+          (is (= (:revision-id first-revision) (:parent second-revision))))))))

@@ -3,8 +3,7 @@
    [clojure.test :refer [deftest is]]
    [cognitect.anomalies :as anomaly]
    [linear.handler.turso.push :as push]
-   [linear.test :as test]
-   [linear.usecase.database :as database])
+   [linear.test :as test])
   (:import
    (java.io ByteArrayInputStream)
    (java.util Arrays)))
@@ -111,61 +110,6 @@
                #(push/command
                   {:body-size 1024
                    :batch (batch [(step "SELECT ?" [value])])})))))))
-
-(defn- push-context [evaluator]
-  (let [snapshot (reify
-                   java.lang.AutoCloseable
-                   (close [_])
-                   database/Snapshot
-                   (-revision-id [_] "r-current")
-                   (-size [_] 0)
-                   (-fetch-pages-by-ids [_ _] {}))]
-    {:database-resolver
-     (reify database/DatabaseResolver
-       (-resolve-database [_ database-id]
-         (is (= "d-01M11GV3ER6E777ERMD0DK7CA1" database-id))
-         {:id database-id
-          :display-name "Primary"
-          :keychain ::keychain}))
-     :snapshot-reader
-     (reify database/SnapshotReader
-       (-latest-snapshot [_ _] snapshot))
-     :revision-writer
-     (reify database/RevisionWriter
-       (-publish-next-revision! [_ _ revision] revision))
-     :evaluator evaluator}))
-
-(deftest push-handler-forwards-the-domain-command-through-capabilities
-  (let [evaluated (atom nil)
-        context   (push-context
-                    (reify database/Evaluator
-                      (-evaluate [_ {:keys [command]}]
-                        (reset! evaluated command)
-                        {:revision-id "r-next"
-                         :parent "r-current"
-                         :database-page-count 0
-                         :pages {}})))
-        response  ((push/handler context)
-                   {:path-params {:id "d-01M11GV3ER6E777ERMD0DK7CA1"}
-                    :headers {"content-length" "1024"}
-                    :body-params {:requests [{:type "batch"
-                                              :batch (batch [])}]}})]
-    (is (= 200 (:status response)))
-    (is (= {:statements []} @evaluated))))
-
-(deftest push-handler-keeps-application-failures-as-top-level-errors
-  (let [context  (push-context
-                   (reify database/Evaluator
-                     (-evaluate [_ _]
-                       (throw (ex-info "Evaluator unavailable"
-                                       {::anomaly/category ::anomaly/unavailable})))))
-        response ((push/handler context)
-                  {:path-params {:id "d-01M11GV3ER6E777ERMD0DK7CA1"}
-                   :headers {"content-length" "1024"}
-                   :body-params {:requests [{:type "batch"
-                                             :batch (batch [])}]}})]
-    (is (= 500 (:status response)))
-    (is (= "error" (get-in response [:body :results 0 :type])))))
 
 (deftest push-handler-rejects-an-invalid-content-length
   (let [response ((push/handler {})

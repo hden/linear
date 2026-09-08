@@ -1,22 +1,28 @@
 Linear
 ---
 
+docs:
+
+* @docs/architecture.md
+* @bb.edn (frequently used commands)
+
 tips:
 
 * domain model が中心にいて、周りが capability を提供する構成を重要視
 * 破壊的変更を恐れるな。後方互換性は不要
 * 我々がコントロール出来るものは malli の instrumentation で十分。malli の instrumentation で十分な部分は実行時のバリデーションは不要。どうしても実行時にバリデーションせざるを得ない部分のみバリデーションする
 
-
-Do's & Dont's:
+do's & dont's:
 
 * 主張は全て hard-evidence によって裏付ける、逆に hard-evidence がない主張は hallucination と見なす
 * 再利用する必要がない　schema は named にせず inline で十分
 * 副作用と目的としない関数には bang (!) をつけない
 * dynamic でもないのに earmuff (*) をつけない
+* `foo*` みたいに * を suffix につけない
 
 refs:
 
+* https://eli.thegreenplace.net/2016/the-expression-problem-and-its-solutions/
 * https://duct-framework.org/docs/
 * https://github.com/clj-kondo/clj-kondo/blob/master/doc/config.md
 * https://github.com/metosin/malli/tree/master

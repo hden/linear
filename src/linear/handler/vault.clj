@@ -1,7 +1,6 @@
 (ns linear.handler.vault
   (:require
    [cognitect.anomalies :as anomaly]
-   [linear.adapter.postgres.vault]
    [linear.usecase.vault :as vault]))
 
 (defn create [context]

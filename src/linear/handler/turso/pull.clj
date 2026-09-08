@@ -29,7 +29,7 @@
       ;; the official client for partial-sync query strategy. The official
       ;; CLI sync server does not implement these selectors yet.
       (let [pull (protobuf/decode-pull (body-bytes body))
-            result  (database/pull-for
+            result  (database/pull
                       context
                       (:id path-params)
                       {:server-revision (not-empty (:server-revision pull))

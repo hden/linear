@@ -3,7 +3,7 @@
   (:require
    [linear.adapter.sqlite.core :refer [fault]]
    [linear.spec :as spec]
-   [linear.usecase.database :as database]))
+   [linear.usecase.database.revisions :as revisions]))
 
 (def ^:private ^:const wal-header-size 32)
 (def ^:private ^:const frame-header-size 24)
@@ -93,7 +93,7 @@
                                      page-size)]
             (let [page-number (u32 header 0)
                   page-count (u32 header 4)
-                  _          (when-not (spec/valid? ::database/page-id page-number)
+                  _          (when-not (spec/valid? ::revisions/page-id page-number)
                                (fault "Invalid SQLite WAL page number"
                                       {:reason      ::invalid-page-number
                                        :page-number page-number}))

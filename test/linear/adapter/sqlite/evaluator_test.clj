@@ -4,17 +4,18 @@
    [integrant.core :as integrant]
    [linear.adapter.sqlite.evaluator]
    [linear.adapter.sqlite.test-support :as support]
-   [linear.usecase.database :as database]))
+   [linear.usecase.database.evaluator :as evaluator]
+   [linear.usecase.database.revisions :as revisions]))
 
 (defrecord FailingSnapshot [snapshot fetch-count failure]
-  database/Snapshot
+  revisions/Snapshot
   (-revision-id [_]
-    (database/revision-id snapshot))
+    (revisions/revision-id snapshot))
   (-size [_]
-    (database/size snapshot))
+    (revisions/size snapshot))
   (-fetch-pages-by-ids [_ arg-map]
     (if (= 1 (swap! fetch-count inc))
-      (database/fetch-pages-by-ids snapshot arg-map)
+      (revisions/fetch-pages-by-ids snapshot arg-map)
       (throw failure))))
 
 (defn- caused-by? [error cause]
@@ -29,7 +30,7 @@
     (Class/forName "org.sqlite.JDBC")
     (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator {})]
       (try
-        (let [result (database/evaluate
+        (let [result (evaluator/evaluate
                        evaluator
                        {:snapshot (support/snapshot (support/sqlite-image))
                         :command {:statements
@@ -49,7 +50,7 @@
       (try
         (let [evaluate-async (fn [value]
                                (future
-                                 (database/evaluate
+                                 (evaluator/evaluate
                                    evaluator
                                    {:snapshot base
                                     :command {:statements
@@ -67,7 +68,7 @@
   (when (support/sqlite-available?)
     (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator {})]
       (try
-        (let [result (database/evaluate
+        (let [result (evaluator/evaluate
                        evaluator
                        {:snapshot (support/snapshot (support/sqlite-image))
                         :command
@@ -97,10 +98,10 @@
         (doseq [sql ["UPDATE t SET value = 'one'; UPDATE t SET value = 'two'"
                      "COMMIT"]]
           (is (thrown? clojure.lang.ExceptionInfo
-                       (database/evaluate evaluator
-                                          {:snapshot base
-                                           :command {:statements [{:sql sql
-                                                                   :parameters []}]}}))))
+                       (evaluator/evaluate evaluator
+                         {:snapshot base
+                          :command {:statements [{:sql sql
+                                                  :parameters []}]}}))))
         (finally
           (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator))))))
 
@@ -110,16 +111,16 @@
           base      (support/snapshot (support/sqlite-image))]
       (try
         (is (thrown? clojure.lang.ExceptionInfo
-                     (database/evaluate evaluator
-                                        {:snapshot base
-                                         :command {:statements
-                                                   [{:sql "UPDATE missing_table SET value = 1"
-                                                     :parameters []}]}})))
-        (let [result (database/evaluate evaluator
-                                        {:snapshot base
-                                         :command {:statements
-                                                   [{:sql "UPDATE t SET value = ? WHERE id = 1"
-                                                     :parameters ["after-failure"]}]}})]
+                     (evaluator/evaluate evaluator
+                       {:snapshot base
+                        :command {:statements
+                                  [{:sql "UPDATE missing_table SET value = 1"
+                                    :parameters []}]}})))
+        (let [result (evaluator/evaluate evaluator
+                       {:snapshot base
+                        :command {:statements
+                                  [{:sql "UPDATE t SET value = ? WHERE id = 1"
+                                    :parameters ["after-failure"]}]}})]
           (is (= "r-0" (:parent result)))
           (is (seq (:pages result))))
         (finally
@@ -133,18 +134,18 @@
           failing   (->FailingSnapshot base (atom 0) cause)]
       (try
         (let [failure (try
-                        (database/evaluate evaluator
-                                           {:snapshot failing
-                                            :command {:statements []}})
+                        (evaluator/evaluate evaluator
+                          {:snapshot failing
+                           :command {:statements []}})
                         nil
                         (catch Exception error
                           error))]
           (is (caused-by? failure cause)))
-        (let [result (database/evaluate evaluator
-                                        {:snapshot base
-                                         :command {:statements
-                                                   [{:sql "UPDATE t SET value = ? WHERE id = 1"
-                                                     :parameters ["after-callback-failure"]}]}})]
+        (let [result (evaluator/evaluate evaluator
+                       {:snapshot base
+                        :command {:statements
+                                  [{:sql "UPDATE t SET value = ? WHERE id = 1"
+                                    :parameters ["after-callback-failure"]}]}})]
           (is (= "r-0" (:parent result))))
         (finally
           (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator))))))

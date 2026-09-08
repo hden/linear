@@ -4,13 +4,17 @@
   test {:doc "Runs the test suite"
         :task (apply clojure "-M:duct:test" "--test" *command-line-args*)}
   lint {:doc "Runs clj-kondo"
-        :task (apply clojure "-M:lint" "--lint" "src" "test" *command-line-args*)}
+        :task (apply clojure "-M:lint" "--lint" "src" "test" "scripts" *command-line-args*)}
+  architecture {:doc "Checks architectural dependency rules"
+                :task (clojure "-M:architecture")}
+  architecture:test {:doc "Tests the architecture checker"
+                     :task (clojure "-M:architecture-test")}
   check {:doc "Checks for reflection warnings"
          :task (apply clojure "-M:check" *command-line-args*)}
   format:check {:doc "Checks Standard Clojure Style formatting"
-                :task (apply shell "standard-clj" "check" "src" "test" *command-line-args*)}
+                :task (apply shell "standard-clj" "check" "src" "test" "scripts" *command-line-args*)}
   format:fix {:doc "Formats Clojure and EDN files"
-              :task (apply shell "standard-clj" "fix" "src" "test" "deps.edn" "duct.edn" "bb.edn"
+              :task (apply shell "standard-clj" "fix" "src" "test" "scripts" "deps.edn" "duct.edn" "bb.edn"
                            *command-line-args*)}
   coverage {:doc "Runs Cloverage and writes LCOV data"
             :task (apply clojure "-M:cov" *command-line-args*)}

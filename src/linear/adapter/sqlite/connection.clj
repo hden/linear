@@ -7,7 +7,7 @@
    [linear.adapter.sqlite.ffi :as ffi]
    [linear.adapter.sqlite.protocol :as sqlite]
    [linear.spec :refer [spec-for]]
-   [linear.usecase.database :as database])
+   [linear.usecase.database.evaluator :as evaluator])
   (:import
    (java.lang AutoCloseable)
    (java.lang.foreign MemorySegment)
@@ -280,7 +280,7 @@
                       (sqlite-diagnostics database result)))))))
 
 (defn execute-statement
-  {:malli/schema [:-> ::connection ::database/statement :nil]}
+  {:malli/schema [:-> ::connection ::evaluator/statement :nil]}
   [connection {:keys [sql parameters]}]
   (ensure-open! connection)
   (let [database (:handle connection)]

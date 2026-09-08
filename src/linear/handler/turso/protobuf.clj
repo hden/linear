@@ -1,7 +1,7 @@
 (ns linear.handler.turso.protobuf
   (:require
    [linear.spec :as spec]
-   [linear.usecase.database :as database]
+   [linear.usecase.database.revisions :as revisions]
    [ring.core.protocols :as ring])
   (:import
    (java.io ByteArrayInputStream ByteArrayOutputStream DataInputStream OutputStream)
@@ -159,7 +159,7 @@
       (write-varint! output 1))))
 
 (defn- sync-page-id [page-id]
-  (if (spec/valid? ::database/page-id page-id)
+  (if (spec/valid? ::revisions/page-id page-id)
     (dec page-id)
     (throw (ex-info "Invalid domain page ID"
                     {:type ::invalid-page-id

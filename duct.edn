@@ -19,26 +19,27 @@
   {:object-store-url   #ig/var slatedb-object-store-url
    :max-open-databases #ig/var slatedb-max-open-databases}
 
+  :linear.adapter.postgres/module {}
+
   :duct.module/logging {}
 
   :duct.module/sql
   {:migrations #duct/include "migrations.edn"}
 
-  :linear.handler.turso.common/database-resolver {}
+  :linear.adapter.crypto.tempel/keychain {}
+
+  :linear.adapter.crypto.tempel/master-key
+  {:id "dev-ephemeral"}
 
   :duct.module/web
   {:features #{:api}
    :handler-opts
-   {:logger                                  #ig/ref :duct/logger
-    :linear.usecase.core/postgres-datasource #ig/ref :duct.database.sql/hikaricp
-    :linear.usecase.core/database-evaluator  #ig/ref :linear.adapter.sqlite.evaluator/evaluator
-    :linear.usecase.core/snapshot-reader     #ig/ref :linear.adapter.slatedb.store/store
-    :linear.usecase.core/revision-writer     #ig/ref :linear.adapter.slatedb.store/store
-    :database-resolver                       #ig/ref :linear.handler.turso.common/database-resolver
-    :evaluator                               #ig/ref :linear.adapter.sqlite.evaluator/evaluator
-    :snapshot-reader                         #ig/ref :linear.adapter.slatedb.store/store
-    :database-reader                         #ig/ref :linear.adapter.slatedb.store/store
-    :revision-writer                         #ig/ref :linear.adapter.slatedb.store/store}
+   {:logger                             #ig/ref :duct/logger
+    :linear.usecase.core/database       #ig/ref :linear.adapter.postgres/datasource
+    :linear.usecase.core/revision-store #ig/ref :linear.adapter.slatedb.store/store
+    :linear.usecase.core/evaluator      #ig/ref :linear.adapter.sqlite.evaluator/evaluator
+    :linear.usecase.core/keychain       #ig/ref :linear.adapter.crypto.tempel/keychain
+    :linear.usecase.core/master-key     #ig/ref :linear.adapter.crypto.tempel/master-key}
    :middleware [:linear.handler.turso.push/request-body-limit]
    :routes
    [["/health/ready" {:get :linear.handler.health/ready}]

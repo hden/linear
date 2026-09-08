@@ -1,24 +1,32 @@
 (ns linear.usecase.healthcheck
   (:require
-   [linear.protocol :as protocol]
+   [linear.spec :refer [spec-for]]
    [linear.usecase.core :as core]))
 
-(defn- every-check? [context check]
+(defprotocol Checkable
+  (-ready? [checkable])
+  (-ok? [checkable]))
+
+(defn checkable? [value]
+  (satisfies? Checkable value))
+
+(defmethod spec-for ::checkable [_]
+  [:fn checkable?])
+
+(defn- every-check? [context predicate]
   (try
     (let [checkables (core/checkables context)]
       (and (seq checkables)
-           (every? check checkables)))
+           (every? predicate checkables)))
     (catch Exception _
       false)))
 
 (defn ready?
-  {:malli/schema [:-> ::core/context
-                      :boolean]}
+  {:malli/schema [:-> [:map-of :keyword :any] :boolean]}
   [context]
-  (every-check? context protocol/ready?))
+  (every-check? context #(-ready? %)))
 
 (defn ok?
-  {:malli/schema [:-> ::core/context
-                      :boolean]}
+  {:malli/schema [:-> [:map-of :keyword :any] :boolean]}
   [context]
-  (every-check? context protocol/ok?))
+  (every-check? context #(-ok? %)))

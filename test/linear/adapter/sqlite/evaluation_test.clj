@@ -4,10 +4,10 @@
    [cognitect.anomalies :as anomaly]
    [linear.adapter.sqlite.evaluation :as evaluation]
    [linear.adapter.sqlite.protocol :as sqlite]
-   [linear.usecase.database :as database]))
+   [linear.usecase.database.revisions :as revisions]))
 
 (defrecord Snapshot [pages]
-  database/Snapshot
+  revisions/Snapshot
   (-revision-id [_] "r-0")
   (-size [_] (count pages))
   (-fetch-pages-by-ids [_ {:keys [ids]}]

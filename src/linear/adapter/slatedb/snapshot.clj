@@ -3,19 +3,18 @@
    [cognitect.anomalies :as anomaly]
    [linear.adapter.slatedb.codec :as codec]
    [linear.adapter.slatedb.key :as key]
-   [linear.usecase.database :as database])
-  (:import
-   (java.lang AutoCloseable)))
+   [linear.usecase.database.revisions :as revisions]
+   [linear.usecase.keychain :as keychain]))
 
 (defn head-revision-id
-  {:malli/schema [:-> [:fn ifn?] ::database/revision-id]}
+  {:malli/schema [:-> [:fn ifn?] ::revisions/revision-id]}
   [read-values]
   (let [[value] (read-values [(key/head)])
         head (codec/decode-head value)]
     (or (:revision-id head)
         (throw (ex-info "SlateDB HEAD does not exist"
                         {::anomaly/category ::anomaly/not-found
-                         :reason ::database/head-not-found})))))
+                         :reason ::revisions/head-not-found})))))
 
 (defn- revision-metadata [read-values keychain revision-id]
   (let [record-key (key/revision revision-id)
@@ -32,12 +31,12 @@
       (nil? revision-id)
       (throw (ex-info "Revision does not contain page state"
                       {::anomaly/category ::anomaly/fault
-                       :reason ::database/incomplete-revision
+                       :reason ::revisions/incomplete-revision
                        :page-ids page-ids}))
       (contains? seen revision-id)
       (throw (ex-info "Revision chain contains a cycle"
                       {::anomaly/category ::anomaly/fault
-                       :reason ::database/revision-cycle
+                       :reason ::revisions/revision-cycle
                        :revision-id revision-id}))
       :else
       (if-let [revision (revision-metadata read-values keychain revision-id)]
@@ -48,7 +47,7 @@
                  (conj seen revision-id)))
         (throw (ex-info "SlateDB revision does not exist"
                         {::anomaly/category ::anomaly/not-found
-                         :reason ::database/revision-not-found
+                         :reason ::revisions/revision-not-found
                          :revision-id revision-id}))))))
 
 (defn- changed-page-ids [read-values keychain target-revision-id client-revision-id]
@@ -61,13 +60,13 @@
         (nil? revision-id)
         (throw (ex-info "Client revision is not an ancestor of the target revision"
                         {::anomaly/category ::anomaly/incorrect
-                         :reason ::database/invalid-revision-cursor
+                         :reason ::revisions/invalid-revision-cursor
                          :client-revision-id client-revision-id
                          :target-revision-id target-revision-id}))
         (contains? seen revision-id)
         (throw (ex-info "Revision chain contains a cycle"
                         {::anomaly/category ::anomaly/fault
-                         :reason ::database/revision-cycle
+                         :reason ::revisions/revision-cycle
                          :revision-id revision-id}))
         :else
         (if-let [revision (revision-metadata read-values keychain revision-id)]
@@ -76,14 +75,14 @@
                  (conj seen revision-id))
           (throw (ex-info "Client revision is not an ancestor of the target revision"
                           {::anomaly/category ::anomaly/incorrect
-                           :reason ::database/invalid-revision-cursor
+                           :reason ::revisions/invalid-revision-cursor
                            :client-revision-id client-revision-id
                            :target-revision-id target-revision-id})))))))
 
 (defn- current-pages [read-values keychain page-ids]
-  (let [page-ids (vec page-ids)
+  (let [page-ids    (vec page-ids)
         record-keys (mapv key/page page-ids)
-        values (read-values record-keys)]
+        values      (read-values record-keys)]
     (into {}
           (map (fn [page-id record-key value]
                  [page-id (codec/decode-page keychain record-key value)])
@@ -91,77 +90,54 @@
                record-keys
                values))))
 
-(defrecord ^:private Snapshot [read-values revision-id keychain fetch-pages close! closed?]
-  database/Snapshot
+(defrecord ^:private Snapshot [read-values revision-id keychain fetch-pages]
+  revisions/Snapshot
   (-revision-id [_]
     revision-id)
   (-size [_]
     (:database-page-count
       (revision-metadata read-values keychain revision-id)))
   (-fetch-pages-by-ids [_ {:keys [ids]}]
-    (fetch-pages ids))
-  AutoCloseable
-  (close [_]
-    (when (compare-and-set! closed? false true)
-      (close!))))
+    (fetch-pages ids)))
 
-(defn- create-snapshot
-  [read-values revision-id keychain fetch-pages close!]
-  (->Snapshot read-values revision-id keychain fetch-pages close! (atom false)))
+(defn- create-snapshot [read-values revision-id keychain fetch-pages]
+  (->Snapshot read-values revision-id keychain fetch-pages))
 
 (defn snapshot
   {:malli/schema [:->
                   [:fn ifn?]
-                  ::database/revision-id
-                  ::database/keychain
-                  [:fn ifn?]
-                  [:and
-                   ::database/snapshot
-                   [:fn #(instance? AutoCloseable %)]]]}
-  [read-values revision-id keychain close!]
+                  ::revisions/revision-id
+                  [:fn keychain/keychain?]
+                  ::revisions/snapshot]}
+  [read-values revision-id keychain]
   (create-snapshot read-values
-    revision-id
-    keychain
-    #(current-pages read-values keychain %)
-    close!))
+                   revision-id
+                   keychain
+                   #(current-pages read-values keychain %)))
 
-(defrecord ^:private ReadSession [read-values keychain close! closed?]
-  database/DatabaseReadSession
+(defrecord ^:private ConsistentView [read-values keychain]
+  revisions/ConsistentView
   (-head [_]
     (let [revision-id (head-revision-id read-values)]
       (create-snapshot read-values
                        revision-id
                        keychain
-                       #(current-pages read-values keychain %)
-                       (fn []))))
+                       #(current-pages read-values keychain %))))
   (-as-of [_ revision-id]
     (when-not (revision-metadata read-values keychain revision-id)
       (throw (ex-info "SlateDB revision does not exist"
                       {::anomaly/category ::anomaly/not-found
-                       :reason ::database/revision-not-found
+                       :reason ::revisions/revision-not-found
                        :revision-id revision-id})))
     (create-snapshot read-values
                      revision-id
                      keychain
-                     #(pages-at-revision read-values keychain revision-id %)
-                     (fn [])))
+                     #(pages-at-revision read-values keychain revision-id %)))
   (-changes-since [_ target-revision-id client-revision-id]
     (changed-page-ids read-values
                       keychain
                       target-revision-id
-                      client-revision-id))
-  AutoCloseable
-  (close [_]
-    (when (compare-and-set! closed? false true)
-      (close!))))
+                      client-revision-id)))
 
-(defn read-session
-  {:malli/schema [:->
-                  [:fn ifn?]
-                  ::database/keychain
-                  [:fn ifn?]
-                  [:and
-                   ::database/database-read-session
-                   [:fn #(instance? AutoCloseable %)]]]}
-  [read-values keychain close!]
-  (->ReadSession read-values keychain close! (atom false)))
+(defn consistent-view [read-values keychain]
+  (->ConsistentView read-values keychain))

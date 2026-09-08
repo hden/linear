@@ -6,7 +6,7 @@
    [linear.adapter.sqlite.protocol :as sqlite]
    [linear.adapter.sqlite.wal :as wal]
    [linear.spec :refer [spec-for]]
-   [linear.usecase.database :as database]))
+   [linear.usecase.database.revisions :as revisions]))
 
 (defrecord WalFile [state]
   sqlite/File
@@ -59,7 +59,7 @@
   [:fn #(instance? Evaluation %)])
 
 (defn evaluation
-  {:malli/schema [:-> ::database/snapshot ::sqlite/path ::evaluation]}
+  {:malli/schema [:-> ::revisions/snapshot ::sqlite/path ::evaluation]}
   [snapshot path]
   (let [state (atom {:wal (wal/new-capture) :commits []})]
     (->Evaluation path

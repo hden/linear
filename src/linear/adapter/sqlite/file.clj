@@ -2,11 +2,11 @@
   (:require
    [linear.adapter.sqlite.core :refer [fault]]
    [linear.adapter.sqlite.protocol :as sqlite]
-   [linear.usecase.database :as database]))
+   [linear.usecase.database.revisions :as revisions]))
 
 (defn- fetch-pages [snapshot page-numbers]
   (let [page-numbers (set page-numbers)
-        pages        (database/fetch-pages-by-ids snapshot {:ids page-numbers})]
+        pages        (revisions/fetch-pages-by-ids snapshot {:ids page-numbers})]
     (into {}
           (map (fn [page-number]
                  [page-number (get pages page-number)]))
@@ -74,7 +74,7 @@
     file-size))
 
 (defn snapshot-file
-  {:malli/schema [:-> ::database/snapshot ::sqlite/file]}
+  {:malli/schema [:-> ::revisions/snapshot ::sqlite/file]}
   [snapshot]
   (let [page-size (page-size snapshot)]
-    (->SnapshotFile snapshot page-size (* (database/size snapshot) page-size))))
+    (->SnapshotFile snapshot page-size (* (revisions/size snapshot) page-size))))
