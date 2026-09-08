@@ -1,4 +1,4 @@
-FROM eclipse-temurin:26-jdk
+FROM eclipse-temurin:25-jdk
 
 ARG BABASHKA_VERSION=1.13.219
 ARG TARGETARCH

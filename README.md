@@ -1,5 +1,13 @@
 ## Native libraries
 
+The project selects Java 25 LTS through jenv using `.java-version`. On macOS,
+install the versioned Homebrew JDK and register it with jenv:
+
+```sh
+brew install openjdk@25
+jenv add "$(brew --prefix openjdk@25)/libexec/openjdk.jdk/Contents/Home"
+```
+
 The application loads SQLite (`sqlite3`) and SlateDB (`slatedb_uniffi`) by
 their standard names from the JVM library path. Configure
 `JAVA_TOOL_OPTIONS` before starting Clojure; the application does not read
