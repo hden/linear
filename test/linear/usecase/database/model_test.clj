@@ -136,3 +136,15 @@
               :parameters [true]})))
   (is (not (spec/valid? ::evaluator/push-command
              {:statements [{:sql :not-a-string :parameters []}]}))))
+
+(deftest revision-contract-rejects-invalid-domain-data
+  (is (spec/valid? ::revisions/revision
+                   {:revision-id "r-next" :parent "r-current"
+                    :database-page-count 1 :pages {1 (byte-array [1])}}))
+  (doseq [revision [{:revision-id "next" :parent nil :database-page-count 0 :pages {}}
+                    {:revision-id "r-next" :parent 1 :database-page-count 0 :pages {}}
+                    {:revision-id "r-next" :parent "parent" :database-page-count 0 :pages {}}
+                    {:revision-id "r-next" :parent nil :database-page-count -1 :pages {}}
+                    {:revision-id "r-next" :parent nil :database-page-count 0 :pages {0 (byte-array 0)}}
+                    {:revision-id "r-next" :parent nil :database-page-count 0 :pages {1 "not-bytes"}}]]
+    (is (not (spec/valid? ::revisions/revision revision)))))

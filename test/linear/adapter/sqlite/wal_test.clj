@@ -13,9 +13,10 @@
   (aset-byte bytes (+ offset 3) (unchecked-byte value))
   bytes)
 
-(defn- wal-header []
+(defn- wal-header [{:keys [magic page-size]
+                    :or   {magic 0x377f0682 page-size page-size}}]
   (doto (byte-array 32)
-    (put-u32! 0 0x377f0682)
+    (put-u32! 0 magic)
     (put-u32! 8 page-size)))
 
 (defn- frame [page-number page-count-after-commit page]
@@ -28,7 +29,7 @@
 (deftest commit-returns-the-last-image-for-a-committed-page
   (let [page (byte-array page-size)
         capture (-> (wal/new-capture)
-                    (wal/write {:offset 0 :bytes (wal-header)})
+                    (wal/write {:offset 0 :bytes (wal-header {})})
                     (wal/write {:offset 32 :bytes (frame 2 2 page)}))
         delta (wal/commit capture)]
     (is (= 2 (:database-page-count delta)))
@@ -36,7 +37,7 @@
 
 (deftest incomplete-frame-does-not-commit
   (let [capture (-> (wal/new-capture)
-                    (wal/write {:offset 0 :bytes (wal-header)})
+                    (wal/write {:offset 0 :bytes (wal-header {})})
                     (wal/write {:offset 32 :bytes (byte-array 24)}))]
     (is (nil? (wal/commit capture)))))
 
@@ -44,7 +45,7 @@
   (let [first-page (byte-array page-size)
         next-page (byte-array page-size)
         capture (-> (wal/new-capture)
-                    (wal/write {:offset 0 :bytes (wal-header)})
+                    (wal/write {:offset 0 :bytes (wal-header {})})
                     (wal/write {:offset 32 :bytes (frame 2 2 first-page)}))
         [capture committed] (wal/sync capture)
         capture (wal/write capture
@@ -57,7 +58,7 @@
   (let [old-page (byte-array page-size)
         new-page (byte-array (repeat page-size 1))
         capture (-> (wal/new-capture)
-                    (wal/write {:offset 0 :bytes (wal-header)})
+                    (wal/write {:offset 0 :bytes (wal-header {})})
                     (wal/write {:offset 32 :bytes (frame 2 2 old-page)})
                     (wal/write {:offset 32 :bytes (frame 3 3 new-page)}))
         candidate (wal/commit capture)]
@@ -69,7 +70,7 @@
   (let [old-page (byte-array page-size)
         new-page (byte-array (repeat page-size 1))
         capture (-> (wal/new-capture)
-                    (wal/write {:offset 0 :bytes (wal-header)})
+                    (wal/write {:offset 0 :bytes (wal-header {})})
                     (wal/write {:offset 32 :bytes (frame 2 2 old-page)}))
         [capture _committed] (wal/sync capture)
         candidate (-> capture
@@ -95,10 +96,21 @@
                   ex))]
     (is (= ::anomaly/fault (-> error ex-data ::anomaly/category)))))
 
+(deftest valid-wal-magic-with-an-invalid-page-size-is-reported-as-a-fault
+  (let [error (try
+                (wal/write (wal/new-capture)
+                           {:offset 0 :bytes (wal-header {:page-size 513})})
+                nil
+                (catch clojure.lang.ExceptionInfo exception
+                  exception))]
+    (is (= ::anomaly/fault (-> error ex-data ::anomaly/category)))
+    (is (= ::wal/invalid-header (:reason (ex-data error))))
+    (is (= 513 (:page-size (ex-data error))))))
+
 (deftest zero-page-number-is-reported-as-a-fault
   (let [error (try
                 (-> (wal/new-capture)
-                    (wal/write {:offset 0 :bytes (wal-header)})
+                    (wal/write {:offset 0 :bytes (wal-header {})})
                     (wal/write {:offset 32
                                 :bytes (frame 0 1 (byte-array page-size))}))
                 nil
@@ -108,8 +120,8 @@
 
 (deftest overlapping-writes-are-read-as-one-byte-range
   (let [capture (-> (wal/new-capture)
-                    (wal/write {:offset 0 :bytes (byte-array [1 2 3])})
+                    (wal/write {:offset 0 :bytes (byte-array [1 2 3 4])})
                     (wal/write {:offset 1 :bytes (byte-array [9 8])}))]
     (testing "the newest write wins"
-      (is (= [1 9 8]
-             (vec (:bytes (wal/read capture 0 3))))))))
+      (is (= [1 9 8 4]
+             (vec (:bytes (wal/read capture 0 4))))))))

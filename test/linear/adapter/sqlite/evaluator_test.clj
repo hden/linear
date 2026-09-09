@@ -5,7 +5,8 @@
    [linear.adapter.sqlite.evaluator]
    [linear.test-data.sqlite :as sqlite-data]
    [linear.usecase.database.evaluator :as evaluator]
-   [linear.usecase.database.revisions :as revisions]))
+   [linear.usecase.database.revisions :as revisions]
+   [linear.usecase.healthcheck :as healthcheck]))
 
 (defrecord FailingSnapshot [snapshot fetch-count failure]
   revisions/Snapshot
@@ -129,12 +130,12 @@
   (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator {})
         base      (sqlite-data/snapshot {:image (sqlite-data/sqlite-image)})]
     (try
-      (is (thrown? clojure.lang.ExceptionInfo
-                   (evaluator/evaluate evaluator
-                     {:snapshot base
-                      :command {:statements
-                                [{:sql "INSERT INTO t (id, value) VALUES (1, 'duplicate')"
-                                  :parameters []}]}})))
+      (doseq [sql ["UPDATE missing_table SET value = 1"
+                   "INSERT INTO t (id, value) VALUES (1, 'duplicate')"]]
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (evaluator/evaluate evaluator
+                       {:snapshot base
+                        :command {:statements [{:sql sql :parameters []}]}}))))
       (let [result (evaluator/evaluate evaluator
                      {:snapshot base
                       :command {:statements
@@ -183,7 +184,9 @@
       (let [evaluation (future
                          (try
                            (evaluator/evaluate evaluator
-                             {:snapshot blocked :command {:statements []}})
+                             {:snapshot blocked
+                              :command {:statements [{:sql "UPDATE t SET value = ? WHERE id = 1"
+                                                      :parameters ["after-drain"]}]}})
                            (catch clojure.lang.ExceptionInfo error
                              error)))]
         (is (true? (deref fetch-started 5000 false)))
@@ -196,10 +199,44 @@
                          {:snapshot base :command {:statements []}})))
           (is (false? (realized? shutdown)))
           (deliver release true)
-          (is (instance? clojure.lang.ExceptionInfo @evaluation))
+          (is (= "r-0" (:parent @evaluation)))
           @shutdown
           (is (= :closed (:status @(:state evaluator))))))
       (finally
         (deliver release true)
         (when (= :ready (:status @(:state evaluator)))
           (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator))))))
+
+(deftest ^:integration evaluator-timeout-abandons-blocked-work
+  (let [evaluator     (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator
+                                          {:shutdown-timeout-ms 1})
+        base          (sqlite-data/snapshot {:image (sqlite-data/sqlite-image)})
+        fetch-started (promise)
+        release       (promise)
+        blocked       (->BlockingSnapshot base fetch-started release)
+        evaluation    (future
+                        (try
+                          (evaluator/evaluate evaluator
+                            {:snapshot blocked
+                             :command {:statements [{:sql "UPDATE t SET value = ? WHERE id = 1"
+                                                     :parameters ["timeout"]}]}})
+                          (catch clojure.lang.ExceptionInfo error error)))]
+    (try
+      (is (true? (deref fetch-started 5000 false)))
+      (let [shutdown (future (integrant/halt-key!
+                               :linear.adapter.sqlite.evaluator/evaluator evaluator))]
+        (is (nil? (deref shutdown 5000 ::timeout)))
+        (is (= :abandoned (:status @(:state evaluator))))
+        (is (false? (healthcheck/ready? {:linear.usecase.core/database evaluator
+                                         :linear.usecase.core/evaluator evaluator})))
+        (is (false? (healthcheck/ok? {:linear.usecase.core/database evaluator
+                                      :linear.usecase.core/evaluator evaluator})))
+        (let [error (try
+                      (evaluator/evaluate evaluator {:snapshot base :command {:statements []}})
+                      (catch clojure.lang.ExceptionInfo exception exception))]
+          (is (= :cognitect.anomalies/unavailable
+                 (:cognitect.anomalies/category (ex-data error))))))
+      (finally
+        (deliver release true)
+        (deref evaluation 5000 ::timeout)
+        (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator)))))

@@ -8,6 +8,7 @@
    [linear.test :refer [run]]
    [linear.usecase.core :as core]
    [linear.usecase.keychain :as keychain]
+   [linear.usecase.transaction :as transaction]
    [ring.mock.request :refer [header request]]
    [taoensso.tempel :as tempel]))
 
@@ -20,6 +21,16 @@
   (is (= 400
          (:status ((handler/create {})
                    (request :post "/control/v1/vaults"))))))
+
+(deftest create-handler-translates-backend-failure-to-500
+  (let [database (reify transaction/Transactable
+                   (-transact [_ _ _]
+                     (throw (ex-info "backend failed"
+                                     {:cognitect.anomalies/category :cognitect.anomalies/fault}))))
+        response ((handler/create {::core/database database})
+                  (header (request :post "/control/v1/vaults")
+                          "idempotency-key" "backend-failure"))]
+    (is (= 500 (:status response)))))
 
 (deftest ^:integration create-handler-returns-201-and-replays-an-idempotent-request
   (with-system [system (run {:keys [:duct.database/sql :duct.migrator/ragtime]})]
