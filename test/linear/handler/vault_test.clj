@@ -7,7 +7,6 @@
    [linear.handler.vault :as handler]
    [linear.test :refer [run]]
    [linear.usecase.core :as core]
-   [linear.usecase.keychain :as keychain]
    [linear.usecase.transaction :as transaction]
    [ring.mock.request :refer [header request]]
    [taoensso.tempel :as tempel]))

@@ -8,7 +8,6 @@
    [linear.test :refer [run]]
    [linear.test-data.postgres :as postgres-data]
    [linear.test-data.slatedb :as slatedb-data]
-   [linear.test-data.sqlite :as sqlite-data]
    [linear.usecase.core :as core]
    [linear.usecase.transaction :as transaction]
    [ring.core.protocols :as ring])
