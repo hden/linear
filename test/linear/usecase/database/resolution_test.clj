@@ -8,6 +8,7 @@
    [linear.test :refer [run]]
    [linear.test-data.postgres :as postgres-data]
    [linear.usecase.database :as database]
+   [linear.usecase.keychain :as keychain]
    [linear.usecase.vault :as vault]
    [next.jdbc :as jdbc]
    [taoensso.tempel :as tempel]))
@@ -25,14 +26,33 @@
                 (database/resolve-by-id master-key tx id))
               nil
               (catch clojure.lang.ExceptionInfo error error)))]
-      (postgres-data/tombstone-database! {:datasource datasource
-                                          :database-id database-id
-                                          :transaction-id transaction-id})
+      (let [{:keys [tombstone-id]}
+            (postgres-data/tombstone-database! {:datasource datasource
+                                                :database-id database-id
+                                                :transaction-id transaction-id})]
+        (is (= tombstone-id
+               (:database_tombstones/id
+                 (first (jdbc/execute! datasource
+                                       ["SELECT id FROM database_tombstones WHERE id = ?"
+                                        tombstone-id]))))))
       (doseq [id [missing-id database-id]]
         (let [error (resolve-error id)]
           (is (= ::anomaly/not-found (-> error ex-data ::anomaly/category)))
           (is (= ::database/database-not-found (-> error ex-data :reason)))
           (is (= id (-> error ex-data :database-id))))))))
+
+(deftest ^:integration resolve-by-id-supports-a-supplied-master-key-id
+  (with-system [system (run {:keys [:duct.database/sql :duct.migrator/ragtime]})]
+    (let [datasource (:duct.database.sql/hikaricp system)
+          master-key (crypto/keychain "test-master-key" (tempel/keychain))
+          {:keys [database-id vault-id]}
+          (postgres-data/create-database! {:datasource datasource
+                                           :master-key master-key})
+          resolved (jdbc/with-transaction [tx datasource {:read-only true}]
+                     (database/resolve-by-id master-key tx database-id))]
+      (is (= database-id (:id resolved)))
+      (is (= vault-id (get-in resolved [:vault :id])))
+      (is (keychain/keychain? (get-in resolved [:vault :keychain]))))))
 
 (deftest ^:integration database-resolution-preserves-key-resolution-errors
   (with-system [system (run {:keys [:duct.database/sql :duct.migrator/ragtime]})]

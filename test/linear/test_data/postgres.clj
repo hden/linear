@@ -19,7 +19,7 @@
       (jdbc/execute! tx ["INSERT INTO transactions (id) VALUES (?)" transaction-id])
       (jdbc/execute! tx
                      ["INSERT INTO vaults (id, owner, ciphertext, encrypted_by, created_by) VALUES (?, ?, ?, ?, ?)"
-                      vault-id "owner-1" ciphertext "dev-ephemeral" transaction-id])
+                      vault-id "owner-1" ciphertext (keychain/id master-key) transaction-id])
       (jdbc/execute! tx
                      ["INSERT INTO databases (id, encrypted_by, current_attributes) VALUES (?, ?, ?)"
                       database-id vault-id attributes-id])
@@ -29,16 +29,20 @@
     {:database-id database-id
      :vault-id vault-id
      :transaction-id transaction-id
-     :tx-id transaction-id
      :attributes-id attributes-id
      :master-key master-key
      :keychain keychain}))
 
-(defn tombstone-database! [{:keys [datasource database-id transaction-id]}]
+(defn tombstone-database!
+  [{:keys [datasource database-id transaction-id tombstone-id]
+    :or   {tombstone-id (str "t-" (random-uuid))}}]
   (jdbc/with-transaction [tx datasource]
     (jdbc/execute! tx
                    ["UPDATE databases SET current_attributes = NULL WHERE id = ?"
                     database-id])
     (jdbc/execute! tx
                    ["INSERT INTO database_tombstones (id, database_id, created_by) VALUES (?, ?, ?)"
-                    (str "t-" (random-uuid)) database-id transaction-id])))
+                    tombstone-id database-id transaction-id]))
+  {:tombstone-id tombstone-id
+   :database-id database-id
+   :transaction-id transaction-id})
