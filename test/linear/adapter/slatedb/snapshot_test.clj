@@ -43,7 +43,7 @@
         (ffi/close-database! database)
         (ffi/close-object-store! object-store)))))
 
-(deftest snapshot-reads-its-revision-metadata-and-pages
+(deftest ^:integration snapshot-reads-its-revision-metadata-and-pages
   (with-seeded-snapshot
     (fn [raw-snapshot keychain]
       (let [read-values       #(ffi/await (ffi/read-snapshot-values raw-snapshot %))
@@ -56,13 +56,13 @@
         (is (Arrays/equals (byte-array [9]) (get pages 2)))
         (is (nil? (get pages 3)))))))
 
-(deftest reads-head-revision-id
+(deftest ^:integration reads-head-revision-id
   (with-seeded-snapshot
     (fn [raw-snapshot _keychain]
       (let [read-values #(ffi/await (ffi/read-snapshot-values raw-snapshot %))]
         (is (= "r-01K002" (snapshot/head-revision-id read-values)))))))
 
-(deftest consistent-view-reconstructs-an-as-of-snapshot-and-changes-since-it
+(deftest ^:integration consistent-view-reconstructs-an-as-of-snapshot-and-changes-since-it
   (let [keychain  (crypto/keychain (tempel/keychain))
         object-store (ffi/open-object-store "memory:///")
         database  (ffi/open-database! object-store (str "d-" (UUID/randomUUID)))

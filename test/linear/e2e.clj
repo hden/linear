@@ -7,8 +7,8 @@
    [linear.adapter.slatedb.connection :as connection]
    [linear.adapter.slatedb.ffi :as ffi]
    [linear.adapter.slatedb.key :as key]
-   [linear.adapter.sqlite.test-support :as sqlite]
    [linear.test :as test]
+   [linear.test-data.sqlite :as sqlite-data]
    [linear.usecase.keychain :as keychain]
    [next.jdbc :as jdbc]
    [taoensso.tempel :as tempel])
@@ -96,7 +96,7 @@
         (seed-postgres! (:duct.database.sql/hikaricp system) master-key database)
         (seed! (:linear.adapter.slatedb.store/store system)
                database
-               (:pages (sqlite/snapshot (sqlite/sqlite-image))))
+               (sqlite-data/pages {:image (sqlite-data/sqlite-image)}))
         (run-client! (server-url system (:id database))))
       (finally
         (integrant/halt! system)))))

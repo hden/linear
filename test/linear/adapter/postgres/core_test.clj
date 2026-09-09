@@ -72,7 +72,7 @@
     (core/rollback tx)
     (is (= 1 @calls))))
 
-(deftest query
+(deftest ^:integration query
   (with-system [sys (run {:keys [:duct.database/sql
                                  :duct.migrator/ragtime]})]
     (let [datasource (:duct.database.sql/hikaricp sys)]

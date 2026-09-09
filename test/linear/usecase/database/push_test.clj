@@ -1,83 +1,24 @@
-(ns linear.adapter.postgres.database-integration-test
+(ns linear.usecase.database.push-test
   (:require
    [clojure.test :refer [deftest is]]
    [cognitect.anomalies :as anomaly]
    [duct.test :refer [with-system]]
    [linear.adapter.crypto.tempel :as crypto]
    [linear.adapter.postgres]
-   [linear.adapter.slatedb.codec :as codec]
-   [linear.adapter.slatedb.connection :as connection]
-   [linear.adapter.slatedb.ffi :as ffi]
-   [linear.adapter.slatedb.key :as key]
+   [linear.adapter.slatedb.store]
+   [linear.adapter.sqlite.evaluator]
    [linear.test :refer [run]]
+   [linear.test-data.postgres :as postgres-data]
+   [linear.test-data.slatedb :as slatedb-data]
+   [linear.test-data.sqlite :as sqlite-data]
    [linear.usecase.core :as core]
    [linear.usecase.database :as database]
    [linear.usecase.database.evaluator :as evaluator]
    [linear.usecase.database.model :as model]
    [linear.usecase.database.revisions :as revisions]
-   [linear.usecase.keychain :as keychain]
    [linear.usecase.transaction :as transaction]
-   [linear.usecase.vault :as vault]
    [next.jdbc :as jdbc]
    [taoensso.tempel :as tempel]))
-
-(defn- seed-database! [datasource database-id vault-id ciphertext tx-id attributes-id]
-  (jdbc/with-transaction [tx datasource]
-    (jdbc/execute! tx ["INSERT INTO transactions (id) VALUES (?)" tx-id])
-    (jdbc/execute! tx
-                   ["INSERT INTO vaults (id, owner, ciphertext, encrypted_by, created_by) VALUES (?, ?, ?, ?, ?)"
-                    vault-id "owner-1" ciphertext "dev-ephemeral" tx-id])
-    (jdbc/execute! tx
-                   ["INSERT INTO databases (id, encrypted_by, current_attributes) VALUES (?, ?, ?)"
-                    database-id vault-id attributes-id])
-    (jdbc/execute! tx
-                   ["INSERT INTO database_attributes (id, database_id, display_name, created_by) VALUES (?, ?, ?, ?)"
-                    attributes-id database-id "Primary" tx-id])))
-
-(defn- seed-database-tombstone! [datasource database-id tx-id]
-  (jdbc/with-transaction [tx datasource]
-    (jdbc/execute! tx
-                   ["UPDATE databases SET current_attributes = NULL WHERE id = ?"
-                    database-id])
-    (jdbc/execute! tx
-                   ["INSERT INTO database_tombstones (id, database_id, created_by) VALUES (?, ?, ?)"
-                    (str "t-" (random-uuid)) database-id tx-id])))
-
-(defn- seed-page! [store database-id keychain page]
-  (let [revision     {:revision-id "r-root"
-                      :parent nil
-                      :database-page-count 1
-                      :pages {1 page}}
-        revision-key (key/revision "r-root")
-        page-key     (key/page 1)]
-    (with-open [database    (connection/database store database-id)
-                transaction (connection/writable-transaction database)]
-      (ffi/await
-        (ffi/write-values
-          transaction
-          [[revision-key (codec/encode-revision keychain revision-key revision)]
-           [page-key (codec/encode-page keychain page-key page)]
-           [(key/head) (codec/encode-head {:revision-id "r-root"})]]))
-      (ffi/await (ffi/commit-transaction transaction)))))
-
-(defn- resolved-database-fixture! [datasource]
-  (let [master-key    (crypto/keychain "dev-ephemeral" (tempel/keychain))
-        keychain      (crypto/new-keychain)
-        suffix        (random-uuid)
-        vault-id      (str "v-" suffix)
-        database-id   (str "d-" suffix)
-        tx-id         (str "tx-" suffix)
-        attributes-id (str "a-" suffix)]
-    (seed-database! datasource
-                    database-id
-                    vault-id
-                    (keychain/encrypt master-key keychain
-                                      {:associated-data (.getBytes ^String vault-id "UTF-8")})
-                    tx-id
-                    attributes-id)
-    {:database-id database-id
-     :keychain keychain
-     :master-key master-key}))
 
 (defn- snapshot [revision-id]
   (reify revisions/Snapshot
@@ -101,60 +42,40 @@
    ::core/revision-store store
    ::core/evaluator evaluator})
 
-(deftest resolve-by-id-treats-missing-and-tombstoned-databases-as-not-found
-  (with-system [system (run {:keys [:duct.database/sql
-                                    :duct.migrator/ragtime]})]
-    (let [datasource (:duct.database.sql/hikaricp system)
-          {:keys [database-id master-key]}
-          (resolved-database-fixture! datasource)
-          tx-id      (subs database-id 2)
-          missing-id (str "d-" (random-uuid))
-          resolve-error
-          (fn [id]
-            (try
-              (jdbc/with-transaction [tx datasource {:read-only true}]
-                (database/resolve-by-id master-key tx id))
-              nil
-              (catch clojure.lang.ExceptionInfo error
-                error)))]
-      (seed-database-tombstone! datasource database-id (str "tx-" tx-id))
-      (doseq [id [missing-id database-id]]
-        (let [error (resolve-error id)]
-          (is (= ::anomaly/not-found (-> error ex-data ::anomaly/category)))
-          (is (= ::database/database-not-found (-> error ex-data :reason)))
-          (is (= id (-> error ex-data :database-id))))))))
-
-(deftest pull-traverses-postgres-vault-decryption-and-slatedb
+(deftest ^:integration pushes-through-domain-sqlite-and-slatedb-boundaries
   (with-system [system (run {:keys [:duct.database/sql
                                     :duct.migrator/ragtime
-                                    :linear.adapter.slatedb.store/store]})]
-    (let [datasource (:duct.database.sql/hikaricp system)
-          store      (:linear.adapter.slatedb.store/store system)
-          master-key (crypto/keychain "dev-ephemeral" (tempel/keychain))
-          keychain   (crypto/new-keychain)
-          context    {::core/database datasource
-                      ::core/master-key master-key
-                      ::core/revision-store store}
-          suffix     (random-uuid)
-          vault-id   (str "v-" suffix)
-          database-id (str "d-" suffix)
-          tx-id      (str "tx-" suffix)
-          attributes-id (str "a-" suffix)
-          page       (byte-array [1 2 3 4])]
-      (seed-database! datasource
-                      database-id
-                      vault-id
-                      (keychain/encrypt master-key keychain
-                                        {:associated-data (.getBytes ^String vault-id "UTF-8")})
-                      tx-id
-                      attributes-id)
-      (seed-page! store database-id keychain page)
-      (let [result (database/pull context database-id {})]
-        (is (= "r-root" (:server-revision result)))
-        (is (= 1 (:database-page-count result)))
-        (is (= (seq page) (seq (get-in result [:pages 1]))))))))
+                                    :linear.adapter.slatedb.store/store
+                                    :linear.adapter.sqlite.evaluator/evaluator]})]
+    (let [datasource  (:duct.database.sql/hikaricp system)
+          store       (:linear.adapter.slatedb.store/store system)
+          evaluator   (:linear.adapter.sqlite.evaluator/evaluator system)
+          {:keys [database-id master-key keychain]}
+          (postgres-data/create-database! {:datasource datasource})
+          context     {::core/database datasource
+                       ::core/master-key master-key
+                       ::core/revision-store store
+                       ::core/evaluator evaluator}]
+      (slatedb-data/store-root! {:store store
+                                 :database-id database-id
+                                 :keychain keychain
+                                 :pages (sqlite-data/pages {:image (sqlite-data/sqlite-image)})})
+      (let [first-revision
+            (database/push! context database-id
+                            {:statements [{:sql "UPDATE t SET value = ? WHERE id = 1"
+                                           :parameters ["first"]}]})
+            second-revision
+            (database/push! context database-id
+                            {:statements
+                             [{:sql (str "SELECT CASE WHEN value = ? THEN 1 "
+                                         "ELSE abs(-9223372036854775808) END FROM t WHERE id = 1")
+                               :parameters ["first"]}
+                              {:sql "UPDATE t SET value = ? WHERE id = 1"
+                               :parameters ["second"]}]})]
+        (is (= "r-root" (:parent first-revision)))
+        (is (= (:revision-id first-revision) (:parent second-revision)))))))
 
-(deftest push-uses-the-database-resolved-from-the-application-context
+(deftest ^:integration push-uses-the-database-resolved-from-the-application-context
   (with-system [system (run {:keys [:duct.database/sql
                                     :duct.migrator/ragtime]})]
     (let [datasource  (:duct.database.sql/hikaricp system)
@@ -213,13 +134,13 @@
                       ::core/revision-store store
                       ::core/evaluator evaluator}
           command    {:statements []}]
-      (seed-database! datasource
-                      database-id
-                      vault-id
-                      (keychain/encrypt master-key keychain
-                                        {:associated-data (.getBytes ^String vault-id "UTF-8")})
-                      tx-id
-                      attributes-id)
+      (postgres-data/create-database! {:datasource datasource
+                                       :master-key master-key
+                                       :keychain keychain
+                                       :database-id database-id
+                                       :vault-id vault-id
+                                       :transaction-id tx-id
+                                       :attributes-id attributes-id})
       (let [revision (database/push! context database-id command)]
         (is (= "r-next" (:revision-id revision)))
         (let [[[_ database-at-read]
@@ -248,12 +169,12 @@
           (is (identical? evaluator (model/evaluator database-at-publish)))
           (is (identical? store (::model/revision-writable database-at-publish))))))))
 
-(deftest push-retries-evaluation-after-a-revision-conflict
+(deftest ^:integration push-retries-evaluation-after-a-revision-conflict
   (with-system [system (run {:keys [:duct.database/sql
                                     :duct.migrator/ragtime]})]
     (let [datasource (:duct.database.sql/hikaricp system)
           {:keys [database-id master-key]}
-          (resolved-database-fixture! datasource)
+          (postgres-data/create-database! {:datasource datasource})
           resolved-names (atom [])
           evaluated    (atom [])
           revision-ids (atom ["r-first" "r-second"])
@@ -296,12 +217,12 @@
       (is (= ["Primary" "Renamed"] @resolved-names))
       (is (= 2 @publishes)))))
 
-(deftest push-does-not-publish-a-revision-with-a-different-parent
+(deftest ^:integration push-does-not-publish-a-revision-with-a-different-parent
   (with-system [system (run {:keys [:duct.database/sql
                                     :duct.migrator/ragtime]})]
     (let [datasource (:duct.database.sql/hikaricp system)
           {:keys [database-id master-key]}
-          (resolved-database-fixture! datasource)
+          (postgres-data/create-database! {:datasource datasource})
           published? (atom false)
           store      (reify
                        revisions/ConsistentReadable
@@ -332,12 +253,12 @@
       (is (= ::database/invalid-revision-parent (-> error ex-data :reason)))
       (is (false? @published?)))))
 
-(deftest push-does-not-retry-a-non-conflict-failure
+(deftest ^:integration push-does-not-retry-a-non-conflict-failure
   (with-system [system (run {:keys [:duct.database/sql
                                     :duct.migrator/ragtime]})]
     (let [datasource (:duct.database.sql/hikaricp system)
           {:keys [database-id master-key]}
-          (resolved-database-fixture! datasource)
+          (postgres-data/create-database! {:datasource datasource})
           reads     (atom 0)
           failure   (ex-info "Unavailable" {::anomaly/category ::anomaly/unavailable})
           store     (reify
@@ -365,12 +286,12 @@
       (is (identical? failure error))
       (is (= 1 @reads)))))
 
-(deftest push-translates-an-exhausted-revision-conflict
+(deftest ^:integration push-translates-an-exhausted-revision-conflict
   (with-system [system (run {:keys [:duct.database/sql
                                     :duct.migrator/ragtime]})]
     (let [datasource (:duct.database.sql/hikaricp system)
           {:keys [database-id master-key]}
-          (resolved-database-fixture! datasource)
+          (postgres-data/create-database! {:datasource datasource})
           publishes (atom 0)
           store     (reify
                       revisions/ConsistentReadable
@@ -403,69 +324,3 @@
       (is (= ::database/push-conflict (-> error ex-data :reason)))
       (is (= 3 (-> error ex-data :attempts)))
       (is (= 3 @publishes)))))
-
-(deftest pull-fetches-pages-before-the-view-and-read-transaction-close
-  (with-system [system (run {:keys [:duct.database/sql :duct.migrator/ragtime]})]
-    (let [datasource (:duct.database.sql/hikaricp system)
-          {:keys [database-id master-key]} (resolved-database-fixture! datasource)
-          read-connection (atom nil)
-          transactable (reify transaction/Transactable
-                         (-transact [_ f options]
-                           (is (= {:read-only true} options))
-                           (transaction/-transact datasource
-                                                  (fn [connection]
-                                                    (reset! read-connection connection)
-                                                    (f connection))
-                                                  options)))
-          active? (atom false)
-          fetched? (atom false)
-          page (byte-array [1 2])
-          snapshot (reify revisions/Snapshot
-                     (-revision-id [_] "r-current")
-                     (-size [_] 1)
-                     (-fetch-pages-by-ids [_ {:keys [ids]}]
-                       (is @active?)
-                       (is (false? (.isClosed ^java.sql.Connection @read-connection)))
-                       (is (= #{1} ids))
-                       (reset! fetched? true)
-                       {1 page}))
-          view (reify revisions/ConsistentView
-                 (-head [_] snapshot)
-                 (-as-of [_ _] snapshot)
-                 (-changes-since [_ _ _] #{}))
-          reader (reify revisions/ConsistentReadable
-                   (-read-consistently [_ f _]
-                     (reset! active? true)
-                     (try
-                       (f view)
-                       (finally (reset! active? false)))))
-          result (database/pull {::core/database transactable
-                                 ::core/master-key master-key
-                                 ::core/revision-store reader}
-                                database-id {})]
-      (is @fetched?)
-      (is (false? @active?))
-      (is (.isClosed ^java.sql.Connection @read-connection))
-      (is (= {1 page} (:pages result))))))
-
-(deftest database-resolution-preserves-key-resolution-errors
-  (with-system [system (run {:keys [:duct.database/sql :duct.migrator/ragtime]})]
-    (let [datasource (:duct.database.sql/hikaricp system)
-          {:keys [database-id]} (resolved-database-fixture! datasource)]
-      (doseq [[configured expected]
-              [[nil {:reason ::vault/master-key-not-configured
-                     :master-key-id "dev-ephemeral"}]
-               [(crypto/keychain "another-key" (tempel/keychain))
-                {:reason ::vault/master-key-not-configured
-                 :master-key-id "dev-ephemeral"}]
-               [(crypto/keychain "dev-ephemeral" (tempel/keychain))
-                {:reason ::vault/vault-decryption-failed
-                 :vault-id (str "v-" (subs database-id 2))}]]]
-        (let [error (try
-                      (jdbc/with-transaction [tx datasource {:read-only true}]
-                        (database/resolve-by-id configured tx database-id))
-                      nil
-                      (catch Exception error error))
-              data (some #(when (:reason (ex-data %)) (ex-data %))
-                         (take-while some? (iterate ex-cause error)))]
-          (is (= (assoc expected ::anomaly/category ::anomaly/fault) data)))))))

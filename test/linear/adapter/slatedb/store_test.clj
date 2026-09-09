@@ -48,7 +48,7 @@
       (finally
         (ffi/await (ffi/rollback-transaction transaction))))))
 
-(deftest failed-consistent-view-acquisition-returns-the-database-lease
+(deftest ^:integration failed-consistent-view-acquisition-returns-the-database-lease
   (let [store    (connection/open {:object-store-url   "memory:///"
                                    :max-open-databases 1})
         keychain (crypto/keychain (tempel/keychain))]
@@ -68,7 +68,7 @@
       (finally
         (connection/close store)))))
 
-(deftest publishes-revision-pages-and-head-atomically
+(deftest ^:integration publishes-revision-pages-and-head-atomically
   (let [store     (connection/open {:object-store-url   "memory:///"
                                     :max-open-databases 1})
         keychain  (crypto/keychain (tempel/keychain))
@@ -100,7 +100,7 @@
       (finally
         (connection/close store)))))
 
-(deftest stale-parent-publishes-no-records
+(deftest ^:integration stale-parent-publishes-no-records
   (let [store     (connection/open {:object-store-url   "memory:///"
                                     :max-open-databases 1})
         keychain  (crypto/keychain (tempel/keychain))
@@ -132,7 +132,7 @@
       (finally
         (connection/close store)))))
 
-(deftest reads-the-latest-snapshot-through-the-domain-capability
+(deftest ^:integration reads-the-latest-snapshot-through-the-domain-capability
   (let [store    (connection/open {:object-store-url   "memory:///"
                                    :max-open-databases 1})
         keychain (crypto/keychain (tempel/keychain))
@@ -153,7 +153,7 @@
       (finally
         (connection/close store)))))
 
-(deftest reads-as-of-and-changes-since-through-one-domain-capability
+(deftest ^:integration reads-as-of-and-changes-since-through-one-domain-capability
   (let [store     (connection/open {:object-store-url   "memory:///"
                                     :max-open-databases 1})
         keychain  (crypto/keychain (tempel/keychain))
@@ -187,7 +187,7 @@
       (finally
         (connection/close store)))))
 
-(deftest callback-failures-return-the-database-lease
+(deftest ^:integration callback-failures-return-the-database-lease
   (doseq [failure [(ex-info "Callback failed" {}) (AssertionError. "Callback failed")]]
     (let [store (connection/open {:object-store-url "memory:///" :max-open-databases 1})
           borrowed (atom nil)

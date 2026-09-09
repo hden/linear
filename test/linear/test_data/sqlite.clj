@@ -1,19 +1,10 @@
-(ns linear.adapter.sqlite.test-support
+(ns linear.test-data.sqlite
   (:require
-   [clojure.java.io :as io]
-   [clojure.string :as string]
    [linear.usecase.database.revisions :as revisions])
   (:import
    (java.nio.file Files)
    (java.sql DriverManager)
    (java.util Arrays)))
-
-(defn sqlite-available? []
-  (let [filename (System/mapLibraryName "sqlite3")]
-    (some #(.isFile (io/file % filename))
-          (string/split (System/getProperty "java.library.path")
-                        (re-pattern (java.util.regex.Pattern/quote
-                                      java.io.File/pathSeparator))))))
 
 (defrecord Snapshot [revision-id pages]
   revisions/Snapshot
@@ -29,10 +20,10 @@
                       (bit-and (aget image 17) 0xff))]
     (if (= value 1) 65536 value)))
 
-(defn snapshot [image]
+(defn snapshot [{:keys [image revision-id] :or {revision-id "r-0"}}]
   (let [size       (page-size image)
         page-count (quot (alength ^bytes image) size)]
-    (->Snapshot "r-0"
+    (->Snapshot revision-id
                 (into {}
                       (map (fn [page-number]
                              [page-number
@@ -40,6 +31,9 @@
                                                   (* (dec page-number) size)
                                                   (* page-number size))]))
                       (range 1 (inc page-count))))))
+
+(defn pages [options]
+  (:pages (snapshot options)))
 
 (defn- create-sqlite-image []
   (let [path (Files/createTempFile "linear-sqlite-evaluator" ".db"

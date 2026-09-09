@@ -1,4 +1,4 @@
-(ns linear.adapter.postgres.vault-test
+(ns linear.usecase.vault-test
   (:require
    [clojure.test :refer [deftest is]]
    [duct.test :refer [with-system]]
@@ -36,7 +36,7 @@
    ::core/keychain       crypto/new-keychain
    ::core/master-key     (crypto/keychain "dev-ephemeral" (tempel/keychain))})
 
-(deftest vault-creation-is-encrypted-and-idempotent
+(deftest ^:integration vault-creation-is-encrypted-and-idempotent
   (with-system [sys (run {:keys [:duct.database/sql
                                  :duct.migrator/ragtime]})]
     (let [datasource (:duct.database.sql/hikaricp sys)

@@ -50,7 +50,7 @@
                       (catch Exception caught
                         caught))))))
 
-(deftest reads-and-writes-value-collections
+(deftest ^:integration reads-and-writes-value-collections
   (let [object-store (ffi/open-object-store "memory:///")
         database (ffi/open-database! object-store "d-ffi-test")]
     (try
@@ -80,7 +80,7 @@
         (ffi/close-database! database)
         (ffi/close-object-store! object-store)))))
 
-(deftest database-snapshot-retains-its-read-view
+(deftest ^:integration database-snapshot-retains-its-read-view
   (let [object-store (ffi/open-object-store "memory:///")
         database (ffi/open-database! object-store "d-snapshot-test")]
     (try

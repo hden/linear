@@ -5,8 +5,8 @@
    [cognitect.anomalies :as anomaly]
    [linear.adapter.sqlite.connection :as connection]
    [linear.adapter.sqlite.evaluation :as evaluation]
-   [linear.adapter.sqlite.test-support :as support]
-   [linear.adapter.sqlite.vfs :as vfs])
+   [linear.adapter.sqlite.vfs :as vfs]
+   [linear.test-data.sqlite :as sqlite-data])
   (:import
    (java.util UUID)))
 
@@ -18,8 +18,8 @@
       (let [invocation (vfs/mount resources
                                   {:path       path
                                    :filesystem (evaluation/evaluation
-                                                 (support/snapshot
-                                                   (support/sqlite-image))
+                                                 (sqlite-data/snapshot
+                                                   {:image (sqlite-data/sqlite-image)})
                                                  path)})]
         (try
           (let [database (connection/open {:path     path
@@ -34,38 +34,35 @@
         (vfs/drain! resources)
         (vfs/uninstall resources)))))
 
-(deftest execute-translates-native-sqlite-errors
-  (when (support/sqlite-available?)
-    (call-with-native-connection
-      (fn [database]
-        (let [failure (try
-                        (connection/execute database "not valid SQL")
-                        nil
-                        (catch clojure.lang.ExceptionInfo error
-                          error))
-              data    (ex-data failure)]
-          (is (= ::anomaly/fault (::anomaly/category data)))
-          (is (= ::connection/statement-failed (:reason data)))
-          (is (pos-int? (:code data)))
-          (is (pos-int? (:extended-code data)))
-          (is (string/includes? (:sqlite-message data) "syntax error")))))))
+(deftest ^:integration execute-translates-native-sqlite-errors
+  (call-with-native-connection
+    (fn [database]
+      (let [failure (try
+                      (connection/execute database "not valid SQL")
+                      nil
+                      (catch clojure.lang.ExceptionInfo error
+                        error))
+            data    (ex-data failure)]
+        (is (= ::anomaly/fault (::anomaly/category data)))
+        (is (= ::connection/statement-failed (:reason data)))
+        (is (pos-int? (:code data)))
+        (is (pos-int? (:extended-code data)))
+        (is (string/includes? (:sqlite-message data) "syntax error"))))))
 
-(deftest execute-rejects-a-closed-connection
-  (when (support/sqlite-available?)
-    (call-with-native-connection
-      (fn [database]
-        (connection/close database)
-        (let [failure (try
-                        (connection/execute database "SELECT 1")
-                        nil
-                        (catch clojure.lang.ExceptionInfo error
-                          error))]
-          (is (= ::connection/connection-closed
-                 (:reason (ex-data failure)))))))))
+(deftest ^:integration execute-rejects-a-closed-connection
+  (call-with-native-connection
+    (fn [database]
+      (connection/close database)
+      (let [failure (try
+                      (connection/execute database "SELECT 1")
+                      nil
+                      (catch clojure.lang.ExceptionInfo error
+                        error))]
+        (is (= ::connection/connection-closed
+               (:reason (ex-data failure))))))))
 
-(deftest close-is-idempotent
-  (when (support/sqlite-available?)
-    (call-with-native-connection
-      (fn [database]
-        (connection/close database)
-        (is (nil? (connection/close database)))))))
+(deftest ^:integration close-is-idempotent
+  (call-with-native-connection
+    (fn [database]
+      (connection/close database)
+      (is (nil? (connection/close database))))))

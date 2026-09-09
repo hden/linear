@@ -5,7 +5,7 @@
    [linear.usecase.keychain :as keychain]
    [taoensso.tempel :as tempel]))
 
-(deftest wraps-and-unwraps-a-keychain-for-one-vault
+(deftest ^:integration wraps-and-unwraps-a-keychain-for-one-vault
   (let [master-key (crypto/keychain "dev-ephemeral" (tempel/keychain))
         keychain   (crypto/new-keychain)
         options    {:associated-data (.getBytes "v-primary" "UTF-8")}
