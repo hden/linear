@@ -126,3 +126,13 @@
             (is (not (spec/valid? input-schema (dissoc database capability))))))))
     (is (not (spec/valid? ::revisions/consistent-view
                (model/database attributes {::model/consistent-view view}))))))
+
+(deftest evaluator-contracts-accept-domain-values-and-reject-invalid-input
+  (is (spec/valid? ::evaluator/statement
+                   {:sql "UPDATE t SET value = ?"
+                    :parameters [nil 1 1.5 "text" (byte-array [1 2])]}))
+  (is (not (spec/valid? ::evaluator/statement
+             {:sql "UPDATE t SET value = ?"
+              :parameters [true]})))
+  (is (not (spec/valid? ::evaluator/push-command
+             {:statements [{:sql :not-a-string :parameters []}]}))))

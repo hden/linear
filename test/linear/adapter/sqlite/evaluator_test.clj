@@ -18,6 +18,17 @@
       (revisions/fetch-pages-by-ids snapshot arg-map)
       (throw failure))))
 
+(defrecord BlockingSnapshot [snapshot fetch-started release]
+  revisions/Snapshot
+  (-revision-id [_]
+    (revisions/revision-id snapshot))
+  (-size [_]
+    (revisions/size snapshot))
+  (-fetch-pages-by-ids [_ arg-map]
+    (deliver fetch-started true)
+    @release
+    (revisions/fetch-pages-by-ids snapshot arg-map)))
+
 (defn- caused-by? [error cause]
   (loop [current error]
     (cond
@@ -101,6 +112,19 @@
       (finally
         (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator)))))
 
+(deftest ^:integration rejects-empty-sql-and-parameter-count-mismatches
+  (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator {})
+        base      (sqlite-data/snapshot {:image (sqlite-data/sqlite-image)})]
+    (try
+      (doseq [statement [{:sql "" :parameters []}
+                         {:sql "UPDATE t SET value = ? WHERE id = 1"
+                          :parameters []}]]
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (evaluator/evaluate evaluator
+                       {:snapshot base :command {:statements [statement]}}))))
+      (finally
+        (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator)))))
+
 (deftest ^:integration evaluator-recovers-after-a-statement-failure
   (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator {})
         base      (sqlite-data/snapshot {:image (sqlite-data/sqlite-image)})]
@@ -109,7 +133,7 @@
                    (evaluator/evaluate evaluator
                      {:snapshot base
                       :command {:statements
-                                [{:sql "UPDATE missing_table SET value = 1"
+                                [{:sql "INSERT INTO t (id, value) VALUES (1, 'duplicate')"
                                   :parameters []}]}})))
       (let [result (evaluator/evaluate evaluator
                      {:snapshot base
@@ -143,3 +167,39 @@
         (is (= "r-0" (:parent result))))
       (finally
         (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator)))))
+
+(deftest ^:integration evaluator-shutdown-rejects-new-work-and-waits-for-an-active-evaluation
+  (let [evaluator     (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator {})
+        base          (sqlite-data/snapshot {:image (sqlite-data/sqlite-image)})
+        fetch-started (promise)
+        release       (promise)
+        draining      (promise)
+        blocked       (->BlockingSnapshot base fetch-started release)]
+    (add-watch (:state evaluator) ::draining
+               (fn [_ _ _ state]
+                 (when (= :draining (:status state))
+                   (deliver draining true))))
+    (try
+      (let [evaluation (future
+                         (try
+                           (evaluator/evaluate evaluator
+                             {:snapshot blocked :command {:statements []}})
+                           (catch clojure.lang.ExceptionInfo error
+                             error)))]
+        (is (true? (deref fetch-started 5000 false)))
+        (let [shutdown (future
+                         (integrant/halt-key!
+                           :linear.adapter.sqlite.evaluator/evaluator evaluator))]
+          (is (true? (deref draining 5000 false)))
+          (is (thrown? clojure.lang.ExceptionInfo
+                       (evaluator/evaluate evaluator
+                         {:snapshot base :command {:statements []}})))
+          (is (false? (realized? shutdown)))
+          (deliver release true)
+          (is (instance? clojure.lang.ExceptionInfo @evaluation))
+          @shutdown
+          (is (= :closed (:status @(:state evaluator))))))
+      (finally
+        (deliver release true)
+        (when (= :ready (:status @(:state evaluator)))
+          (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator))))))

@@ -31,3 +31,13 @@
     (let [context {::core/database  (checkable true false)
                    ::core/evaluator (checkable true true)}]
       (is (not (healthcheck/ok? context))))))
+
+(deftest dependency-exceptions-make-healthchecks-false
+  (let [failing (reify healthcheck/Checkable
+                  (-ready? [_]
+                    (throw (IllegalStateException. "dependency failed")))
+                  (-ok? [_]
+                    (throw (IllegalStateException. "dependency failed"))))
+        context {::core/database failing}]
+    (is (false? (healthcheck/ready? context)))
+    (is (false? (healthcheck/ok? context)))))

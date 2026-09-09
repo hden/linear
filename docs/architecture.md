@@ -192,6 +192,10 @@ Diagnostics have the stable form:
 file:line: from -> to: rule
 ```
 
+See [testing.md](testing.md) for the test placement rules, integration-test
+metadata, and the distinction between the instrumented `bb test` suite and
+the `clojure.test` coverage runner.
+
 ## Influences
 
 - [Integrant](https://github.com/weavejester/integrant) supplies the data-driven

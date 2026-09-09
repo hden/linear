@@ -155,3 +155,26 @@
       (is false "revision cycles must be rejected")
       (catch clojure.lang.ExceptionInfo error
         (is (= "Revision chain contains a cycle" (.getMessage error)))))))
+
+(deftest missing-revisions-and-invalid-cursors-retain-their-domain-reasons
+  (let [keychain    (crypto/keychain (tempel/keychain))
+        revision    {:revision-id "r-head"
+                     :parent nil
+                     :database-page-count 1
+                     :pages {}}
+        revision-key (key/revision (:revision-id revision))
+        values      {(seq revision-key) (codec/encode-revision keychain revision-key revision)}
+        read-values (fn [record-keys]
+                      (mapv #(values (seq %)) record-keys))
+        view        (snapshot/consistent-view read-values keychain)
+        reason      (fn [f]
+                      (try
+                        (f)
+                        (catch clojure.lang.ExceptionInfo error
+                          (:reason (ex-data error)))))]
+    (is (= ::revisions/revision-not-found
+           (reason #(revisions/as-of view "r-missing"))))
+    (is (= ::revisions/invalid-revision-cursor
+           (reason #(revisions/changes-since view "r-head" "r-missing"))))
+    (is (= ::revisions/head-not-found
+           (reason #(snapshot/head-revision-id (constantly [nil])))))))
