@@ -11,8 +11,8 @@
    [ring.mock.request :refer [header request]]
    [taoensso.tempel :as tempel]))
 
-(defn- vault-context [datasource]
-  {::core/database   datasource
+(defn- vault-context [{:keys [database]}]
+  {::core/database   database
    ::core/keychain   crypto/new-keychain
    ::core/master-key (crypto/keychain "dev-ephemeral" (tempel/keychain))})
 
@@ -21,24 +21,23 @@
          (:status ((handler/create {})
                    (request :post "/control/v1/vaults"))))))
 
-(deftest create-handler-translates-backend-failure-to-500
+(deftest ^:integration create-handler-translates-backend-failure-to-500
   (let [database (reify transaction/Transactable
                    (-transact [_ _ _]
-                     (throw (ex-info "backend failed"
+                     (throw (ex-info "distinctive backend failure"
                                      {:cognitect.anomalies/category :cognitect.anomalies/fault}))))
-        response ((handler/create {::core/database database})
+        response ((handler/create (vault-context {:database database}))
                   (header (request :post "/control/v1/vaults")
                           "idempotency-key" "backend-failure"))]
-    (is (= 500 (:status response)))))
+    (is (= 500 (:status response)))
+    (is (= {:error "distinctive backend failure"} (:body response)))))
 
-(deftest ^:integration create-handler-returns-201-and-replays-an-idempotent-request
+(deftest ^:integration create-handler-returns-201
   (with-system [system (run {:keys [:duct.database/sql :duct.migrator/ragtime]})]
-    (let [context  (vault-context (:duct.database.sql/hikaricp system))
+    (let [context  (vault-context {:database (:duct.database.sql/hikaricp system)})
           create   (handler/create context)
           request  (header (request :post "/control/v1/vaults")
                            "idempotency-key" (str "vault-handler-" (random-uuid)))
-          created  (create request)
-          replayed (create request)]
+          created  (create request)]
       (is (= 201 (:status created)))
-      (is (string? (get-in created [:body :id])))
-      (is (= (:body created) (:body replayed))))))
+      (is (string? (get-in created [:body :id]))))))

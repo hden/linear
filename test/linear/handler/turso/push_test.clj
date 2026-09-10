@@ -137,7 +137,7 @@
                            :headers {"content-length" "1"}})]
     (is (= 400 (:status response)))))
 
-(deftest request-body-limit-counts-single-byte-array-and-buffer-reads
+(deftest request-body-limit-counts-read-overloads-and-allows-the-exact-limit
   (doseq [[read-body expected] [[(fn [^java.io.InputStream body]
                                    (loop [bytes []]
                                      (let [value (.read body)]
@@ -159,25 +159,12 @@
       (is (= 200 (:status response)))
       (is (= expected (:body response))))))
 
-(deftest request-body-limit-allows-exactly-the-limit-and-leaves-other-requests-alone
-  (let [handler (push/wrap-request-body-limit
-                  (fn [{:keys [body]}]
-                    {:status 200
-                     :body (if (instance? java.io.InputStream body)
-                             (.readAllBytes ^java.io.InputStream body)
-                             body)})
-                  3)]
-    (is (= [1 2 3]
-           (vec (:body (handler {:uri "/d/d-01M11GV3ER6E777ERMD0DK7CA1/v2/pipeline"
-                                 :body (ByteArrayInputStream. (byte-array [1 2 3]))})))))
-    (is (= [1 2 3 4]
-           (vec (:body (handler {:uri "/health/ok"
-                                 :body (ByteArrayInputStream. (byte-array [1 2 3 4]))})))))))
-
 (deftest request-body-limit-propagates-unrelated-handler-errors
-  (let [handler (push/wrap-request-body-limit
-                  (fn [_]
-                    (throw (IllegalStateException. "unrelated failure")))
-                  3)]
-    (is (thrown? IllegalStateException
-                 (handler {:uri "/health/ok"})))))
+  (let [error   (ex-info "unrelated failure" {:reason ::unrelated-failure})
+        handler (push/wrap-request-body-limit
+                  (fn [_] (throw error))
+                  3)
+        thrown  (try
+                  (handler {:uri "/d/d-01M11GV3ER6E777ERMD0DK7CA1/v2/pipeline"})
+                  (catch clojure.lang.ExceptionInfo exception exception))]
+    (is (identical? error thrown))))

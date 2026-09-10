@@ -32,17 +32,3 @@
      :attributes-id attributes-id
      :master-key master-key
      :keychain keychain}))
-
-(defn tombstone-database!
-  [{:keys [datasource database-id transaction-id tombstone-id]
-    :or   {tombstone-id (str "t-" (random-uuid))}}]
-  (jdbc/with-transaction [tx datasource]
-    (jdbc/execute! tx
-                   ["UPDATE databases SET current_attributes = NULL WHERE id = ?"
-                    database-id])
-    (jdbc/execute! tx
-                   ["INSERT INTO database_tombstones (id, database_id, created_by) VALUES (?, ?, ?)"
-                    tombstone-id database-id transaction-id]))
-  {:tombstone-id tombstone-id
-   :database-id database-id
-   :transaction-id transaction-id})

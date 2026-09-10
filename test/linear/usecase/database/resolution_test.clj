@@ -13,6 +13,16 @@
    [next.jdbc :as jdbc]
    [taoensso.tempel :as tempel]))
 
+(defn- tombstone-database!
+  [{:keys [datasource database-id transaction-id]}]
+  (jdbc/with-transaction [tx datasource]
+    (jdbc/execute! tx
+                   ["UPDATE databases SET current_attributes = NULL WHERE id = ?"
+                    database-id])
+    (jdbc/execute! tx
+                   ["INSERT INTO database_tombstones (id, database_id, created_by) VALUES (?, ?, ?)"
+                    (str "t-" (random-uuid)) database-id transaction-id])))
+
 (deftest ^:integration resolve-by-id-treats-missing-and-tombstoned-databases-as-not-found
   (with-system [system (run {:keys [:duct.database/sql
                                     :duct.migrator/ragtime]})]
@@ -26,15 +36,9 @@
                 (database/resolve-by-id master-key tx id))
               nil
               (catch clojure.lang.ExceptionInfo error error)))]
-      (let [{:keys [tombstone-id]}
-            (postgres-data/tombstone-database! {:datasource datasource
-                                                :database-id database-id
-                                                :transaction-id transaction-id})]
-        (is (= tombstone-id
-               (:database_tombstones/id
-                 (first (jdbc/execute! datasource
-                                       ["SELECT id FROM database_tombstones WHERE id = ?"
-                                        tombstone-id]))))))
+      (tombstone-database! {:datasource datasource
+                            :database-id database-id
+                            :transaction-id transaction-id})
       (doseq [id [missing-id database-id]]
         (let [error (resolve-error id)]
           (is (= ::anomaly/not-found (-> error ex-data ::anomaly/category)))

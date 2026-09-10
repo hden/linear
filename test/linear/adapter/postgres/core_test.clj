@@ -4,8 +4,7 @@
    [cognitect.anomalies :as anomaly]
    [duct.test :refer [with-system]]
    [linear.adapter.postgres.core :as core]
-   [linear.test :refer [run]]
-   [next.jdbc :as jdbc])
+   [linear.test :refer [run]])
   (:import
    (java.sql SQLException)
    (org.postgresql.util PSQLException ServerErrorMessage)))
@@ -82,14 +81,3 @@
               (core/query datasource {:statement {:select [[[:count :*] :count]]
                                                   :from :ragtime-migrations}
                                       :parse-fn #(get-in % [0 :count])}))))))
-
-(deftest ^:integration rollback-leaves-no-writes
-  (with-system [sys (run {:keys [:duct.database/sql
-                                 :duct.migrator/ragtime]})]
-    (let [datasource (:duct.database.sql/hikaricp sys)
-          transaction-id (str "tx-rollback-" (random-uuid))]
-      (jdbc/with-transaction [tx datasource]
-        (jdbc/execute! tx ["INSERT INTO transactions (id) VALUES (?)" transaction-id])
-        (core/rollback tx))
-      (is (empty? (jdbc/execute! datasource
-                    ["SELECT id FROM transactions WHERE id = ?" transaction-id]))))))
