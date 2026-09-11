@@ -76,17 +76,12 @@
                               :status            (:status current)})))
            (update current :active inc))))
 
+(defn- signal-if-drained! [{:keys [status active drained]}]
+  (when (and (= :draining status) (zero? active))
+    (deliver drained true)))
+
 (defn- end-evaluation! [state]
-  (let [drained (volatile! nil)]
-    (swap! state
-           (fn [current]
-             (let [next-state (update current :active dec)]
-               (when (and (= :draining (:status next-state))
-                          (zero? (:active next-state)))
-                 (vreset! drained (:drained next-state)))
-               next-state)))
-    (when-let [signal @drained]
-      (deliver signal true))))
+  (signal-if-drained! (swap! state update :active dec)))
 
 (defrecord ^:private Evaluator [resources state shutdown-timeout-ms]
   healthcheck/Checkable
@@ -136,28 +131,20 @@
 
 (defmethod integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator
   [_ evaluator]
-  (let [drained (volatile! nil)]
-    (swap! (:state evaluator)
-           (fn [state]
-             (let [next-state (assoc state :status :draining)]
-               (when (zero? (:active next-state))
-                 (vreset! drained (:drained next-state)))
-               next-state)))
-    (when-let [signal @drained]
-      (deliver signal true))
-    (let [drained? (try
-                     (with-timeout {:timeout-ms (:shutdown-timeout-ms evaluator)
-                                    :interrupt? true}
-                       @(:drained @(:state evaluator)))
-                     true
-                     (catch TimeoutExceededException _
-                       false))]
-      (if drained?
-        (do
-          (vfs/drain! (:resources evaluator))
-          (vfs/uninstall (:resources evaluator))
-          (swap! (:state evaluator) assoc :status :closed))
-        (swap! (:state evaluator) assoc
-               :status :abandoned
-               :liveness :failed))))
+  (signal-if-drained! (swap! (:state evaluator) assoc :status :draining))
+  (let [drained? (try
+                   (with-timeout {:timeout-ms (:shutdown-timeout-ms evaluator)
+                                  :interrupt? true}
+                     @(:drained @(:state evaluator)))
+                   true
+                   (catch TimeoutExceededException _
+                     false))]
+    (if drained?
+      (do
+        (vfs/drain! (:resources evaluator))
+        (vfs/uninstall (:resources evaluator))
+        (swap! (:state evaluator) assoc :status :closed))
+      (swap! (:state evaluator) assoc
+             :status :abandoned
+             :liveness :failed)))
   nil)
