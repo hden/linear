@@ -1,0 +1,42 @@
+{:lint-as
+ {duct.test/with-system clojure.core/with-open
+  linear.usecase.database/with-database next.jdbc/with-transaction
+  linear.usecase.database.revisions/with-consistent-view next.jdbc/with-transaction
+  linear.usecase.vault/with-transaction next.jdbc/with-transaction
+  linear.usecase.transaction/with-transaction next.jdbc/with-transaction}
+ :hooks
+ {:analyze-call
+  {labrador.core/defretriever hooks.labrador.core/defretriever
+   clojure.core/defn hooks.linear.public-api/check-definition}}
+ :linters
+ {:linear/public-api
+  {:level :error
+   :exceptions
+   {[linear.adapter.crypto.tempel/keychain 2] "Attaches an identifier to a keychain value."
+    [linear.adapter.slatedb.ffi/open-database! 2] "Matches the SlateDB native API argument order."
+    [linear.adapter.slatedb.ffi/read-snapshot-values 2] "Matches the SlateDB native API argument order."
+    [linear.adapter.slatedb.ffi/read-transaction-values 2] "Matches the SlateDB native API argument order."
+    [linear.adapter.slatedb.ffi/write-values 2] "Matches the SlateDB native API argument order."
+    [linear.adapter.sqlite.connection/execute 2] "Executes an SQL string on a connection."
+    [linear.adapter.sqlite.core/fault 2] "Constructs a fault from its message and data."
+    [linear.adapter.sqlite.core/fault 3] "Constructs a fault from its message, data and cause."
+    [linear.adapter.sqlite.ffi/bind-blob64 5] "Matches the SQLite native API argument order."
+    [linear.adapter.sqlite.ffi/bind-double 3] "Matches the SQLite native API argument order."
+    [linear.adapter.sqlite.ffi/bind-int64 3] "Matches the SQLite native API argument order."
+    [linear.adapter.sqlite.ffi/bind-null 2] "Matches the SQLite native API argument order."
+    [linear.adapter.sqlite.ffi/bind-text64 6] "Matches the SQLite native API argument order."
+    [linear.adapter.sqlite.ffi/db-config 3] "Matches the SQLite native API argument order."
+    [linear.adapter.sqlite.ffi/enable-load-extension 2] "Matches the SQLite native API argument order."
+    [linear.adapter.sqlite.ffi/exec 5] "Matches the SQLite native API argument order."
+    [linear.adapter.sqlite.ffi/open-v2 4] "Matches the SQLite native API argument order."
+    [linear.adapter.sqlite.ffi/prepare-v3 6] "Matches the SQLite native API argument order."
+    [linear.adapter.sqlite.ffi/set-authorizer 3] "Matches the SQLite native API argument order."
+    [linear.adapter.sqlite.protocol/read 3] "Matches SQLite File read offset and length."
+    [linear.adapter.sqlite.protocol/truncate 2] "Matches SQLite File truncate length."
+    [linear.adapter.sqlite.protocol/write 3] "Matches SQLite File write offset and bytes."
+    [linear.adapter.sqlite.wal/read 3] "Matches SQLite WAL read offset and length."
+    [linear.adapter.sqlite.wal/truncate 2] "Matches SQLite WAL truncate length."
+    [linear.architecture-test/-main [:variadic 0]] "Existing command-line entry point."
+    [linear.architecture/-main [:variadic 0]] "Existing command-line entry point."
+    [linear.spec/valid? 2] "Tests a value against a schema."
+    [linear.usecase.database.revisions/as-of 2] "Selects a snapshot by revision value."}}}}

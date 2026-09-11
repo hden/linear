@@ -24,8 +24,8 @@
                             {::anomaly/category ::anomaly/fault
                              :reason ::master-key-not-configured
                              :master-key-id encrypted-by})))
-          (if-let [keychain (keychain/decrypt configured ciphertext
-                              {:associated-data (.getBytes ^String id "UTF-8")})]
+          (if-let [keychain (keychain/decrypt configured {:associated-data (.getBytes ^String id "UTF-8")
+                                                          :ciphertext ciphertext})]
             (lab/traverse
               (-> vault
                   (assoc :keychain keychain)
@@ -59,9 +59,8 @@
                                  keychain (core/keychain context)]
                              (assoc attributes
                                     :id id
-                                    :ciphertext (keychain/encrypt
-                                                  master-key keychain
-                                                  {:associated-data (.getBytes ^String id "UTF-8")})
+                                    :ciphertext (keychain/encrypt master-key {:associated-data (.getBytes ^String id "UTF-8")
+                                                                              :value keychain})
                                     :encrypted-by (keychain/id master-key))))
                          data)]
     (transaction/with-transaction [tx (core/transactable context)]

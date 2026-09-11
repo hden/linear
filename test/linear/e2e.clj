@@ -28,8 +28,8 @@
   (let [vault-id (:id vault)
         transaction-id (str "tx-" (random-uuid))
         attributes-id (str "a-" (random-uuid))
-        ciphertext (keychain/encrypt master-key (:keychain vault)
-                                     {:associated-data (.getBytes ^String vault-id "UTF-8")})]
+        ciphertext (keychain/encrypt master-key {:associated-data (.getBytes ^String vault-id "UTF-8")
+                                                 :value (:keychain vault)})]
     (jdbc/with-transaction [tx datasource]
       (jdbc/execute! tx ["INSERT INTO transactions (id) VALUES (?)" transaction-id])
       (jdbc/execute! tx
@@ -49,17 +49,17 @@
                       :pages               pages}
         revision-key (key/revision (:revision-id revision))]
     (into [[revision-key
-            (codec/encode-revision keychain revision-key revision)]]
+            (codec/encode-revision keychain {:record-key revision-key :revision revision})]]
           (concat
             (map (fn [[page-id page]]
                    (let [page-key (key/page page-id)]
-                     [page-key (codec/encode-page keychain page-key page)]))
+                     [page-key (codec/encode-page keychain {:record-key page-key :page page})]))
                  pages)
             [[(key/head)
               (codec/encode-head {:revision-id (:revision-id revision)})]]))))
 
 (defn- seed! [store database pages]
-  (with-open [leased-database (connection/database store (:id database))
+  (with-open [leased-database (connection/database store {:database-id (:id database)})
               transaction     (connection/writable-transaction leased-database)]
     (ffi/await (ffi/write-values transaction (root-records (get-in database [:vault :keychain]) pages)))
     (ffi/await (ffi/commit-transaction transaction))))

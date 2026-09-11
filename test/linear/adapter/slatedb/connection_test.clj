@@ -16,7 +16,7 @@
                       :return-database     (fn [database-id database]
                                              (swap! events conj [:return database-id database]))
                       :close-resources     (fn [])})]
-    (with-open [_database (connection/database connection "d-1")]
+    (with-open [_database (connection/database connection {:database-id "d-1"})]
       (swap! events conj :call))
     (is (= [[:borrow "d-1"]
             :call
@@ -34,7 +34,7 @@
                                              (swap! events conj [:return database-id database]))
                       :close-resources     (fn [])})
         caught (try
-                 (with-open [_database (connection/database connection "d-1")]
+                 (with-open [_database (connection/database connection {:database-id "d-1"})]
                    (throw failure))
                  (catch Exception error
                    error))]
@@ -51,7 +51,7 @@
                                              (throw return-error))
                       :close-resources     (fn [])})
         caught (try
-                 (with-open [_database (connection/database connection "d-1")]
+                 (with-open [_database (connection/database connection {:database-id "d-1"})]
                    :done)
                  (catch Exception error
                    error))]
@@ -65,7 +65,7 @@
                       :return-database (fn [_ _]
                                          (swap! returns inc))
                       :close-resources (fn [])})
-        database   (connection/database connection "d-1")]
+        database   (connection/database connection {:database-id "d-1"})]
     (.close ^AutoCloseable database)
     (.close ^AutoCloseable database)
     (is (= 1 @returns))))

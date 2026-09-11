@@ -17,7 +17,7 @@
 (defmethod spec-for ::database [_]
   ::model/database)
 
-(defn resolve-by-id [master-key tx database-id]
+(defn resolve-by-id [tx {:keys [master-key database-id]}]
   (or (u/run!!
         (u/mapcat
           (fn [{:keys [vault-id] :as database}]
@@ -46,9 +46,7 @@
          read-only# (get params# :read-only false)]
      (transaction/with-transaction
        [tx# (core/transactable context#) {:read-only read-only#}]
-       (let [resolved-database# (resolve-by-id (core/master-key context#)
-                                               tx#
-                                               database-id#)]
+       (let [resolved-database# (resolve-by-id tx# {:master-key (core/master-key context#) :database-id database-id#})]
          (revisions/with-consistent-view
            [view# (core/consistent-readable context#) resolved-database#]
            (let [~binding (model/database
@@ -69,7 +67,7 @@
    :jitter-factor 0.5})
 
 (defn push!
-  [context database-id command]
+  [context {:keys [database-id command]}]
   (try
     (diehard/with-retry revision-conflict-retry-policy
       (let [[database revision]
@@ -87,7 +85,7 @@
         (throw error)))))
 
 (defn pull
-  [context database-id pull-options]
+  [context {:keys [database-id] :as pull-options}]
   (with-database [database context {:database-id database-id
                                     :read-only true}]
     (model/pull database pull-options)))

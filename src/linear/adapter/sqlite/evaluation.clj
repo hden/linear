@@ -59,8 +59,8 @@
   [:fn #(instance? Evaluation %)])
 
 (defn evaluation
-  {:malli/schema [:-> ::revisions/snapshot ::sqlite/path ::evaluation]}
-  [snapshot path]
+  {:malli/schema [:-> ::revisions/snapshot [:map [:path ::sqlite/path]] ::evaluation]}
+  [snapshot {:keys [path]}]
   (let [state (atom {:wal (wal/new-capture) :commits []})]
     (->Evaluation path
                   (str path "-wal")

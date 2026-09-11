@@ -28,7 +28,7 @@
 
 (defn database
   {:malli/schema [:-> ::database :map ::database]}
-  [attributes capabilities]
+  [attributes {:as capabilities}]
   (merge attributes
          (select-keys capabilities
                       [::consistent-view ::evaluator ::revision-writable])))
@@ -41,7 +41,7 @@
                     [::evaluator ::evaluation/evaluator]]]
                   ::evaluation/push-command
                   ::revisions/revision]}
-  [database command]
+  [database {:as command}]
   (let [snapshot (revisions/head (consistent-view database))
         parent (revisions/revision-id snapshot)
         revision (evaluation/evaluate (evaluator database)
@@ -76,7 +76,7 @@
         changed-page-ids (cond
                            (not client-revision) (set (range 1 (inc page-count)))
                            (= client-revision target-revision) #{}
-                           :else (revisions/changes-since view target-revision client-revision))
+                           :else (revisions/changes-since view {:target-revision-id target-revision :client-revision-id client-revision}))
         selected-page-ids (if page-ids
                             (set (filter page-ids changed-page-ids))
                             changed-page-ids)]
@@ -90,5 +90,5 @@
                    [:map [::revision-writable ::revisions/revision-writable]]]
                   ::revisions/revision
                   ::revisions/revision]}
-  [database revision]
-  (revisions/publish-next! (::revision-writable database) revision database))
+  [database {:as revision}]
+  (revisions/publish-next! (::revision-writable database) {:revision revision :database database}))

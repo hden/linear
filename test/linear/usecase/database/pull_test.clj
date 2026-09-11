@@ -25,7 +25,7 @@
                        ::core/revision-store store}
           page        (byte-array [1 2 3 4])]
       (slatedb-data/store-root! {:store store :database-id database-id :keychain keychain :pages {1 page}})
-      (let [result (database/pull context database-id {})]
+      (let [result (database/pull context {:database-id database-id})]
         (is (= "r-root" (:server-revision result)))
         (is (= 1 (:database-page-count result)))
         (is (= (seq page) (seq (get-in result [:pages 1]))))))))
@@ -65,8 +65,7 @@
                      (try (f view) (finally (reset! active? false)))))
           result (database/pull {::core/database transactable
                                  ::core/master-key master-key
-                                 ::core/revision-store reader}
-                                database-id {})]
+                                 ::core/revision-store reader} {:database-id database-id})]
       (is @fetched?)
       (is (false? @active?))
       (is (.isClosed ^java.sql.Connection @read-connection))

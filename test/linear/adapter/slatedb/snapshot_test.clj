@@ -19,9 +19,9 @@
                                         2 (byte-array [9])}}
         revision-key (key/revision (:revision-id revision))]
     [[(key/head) (codec/encode-head {:revision-id (:revision-id revision)})]
-     [revision-key (codec/encode-revision keychain revision-key revision)]
-     [(key/page 1) (codec/encode-page keychain (key/page 1) (get-in revision [:pages 1]))]
-     [(key/page 2) (codec/encode-page keychain (key/page 2) (get-in revision [:pages 2]))]]))
+     [revision-key (codec/encode-revision keychain {:record-key revision-key :revision revision})]
+     [(key/page 1) (codec/encode-page keychain {:record-key (key/page 1) :page (get-in revision [:pages 1])})]
+     [(key/page 2) (codec/encode-page keychain {:record-key (key/page 2) :page (get-in revision [:pages 2])})]]))
 
 (defn- with-seeded-snapshot [f]
   (let [keychain (crypto/keychain (tempel/keychain))
@@ -47,7 +47,7 @@
   (with-seeded-snapshot
     (fn [raw-snapshot keychain]
       (let [read-values       #(ffi/await (ffi/read-snapshot-values raw-snapshot %))
-            database-snapshot (snapshot/snapshot read-values "r-01K002" keychain)
+            database-snapshot (snapshot/snapshot {:read-values read-values :revision-id "r-01K002" :keychain keychain})
             pages             (revisions/fetch-pages-by-ids database-snapshot
                                 {:ids #{1 2 3}})]
         (is (= "r-01K002" (revisions/revision-id database-snapshot)))
@@ -81,11 +81,11 @@
         records   (mapcat (fn [revision]
                             (let [revision-key (key/revision (:revision-id revision))]
                               (concat [[revision-key
-                                        (codec/encode-revision keychain revision-key revision)]]
+                                        (codec/encode-revision keychain {:record-key revision-key :revision revision})]]
                                       (map (fn [[page-id page]]
                                              (let [page-key (key/page page-id)]
                                                [page-key
-                                                (codec/encode-page keychain page-key page)]))
+                                                (codec/encode-page keychain {:record-key page-key :page page})]))
                                            (:pages revision)))))
                           [root first second])]
     (try
@@ -102,7 +102,7 @@
       (let [raw-snapshot (ffi/await (ffi/open-snapshot database))]
         (try
           (let [read-values #(ffi/await (ffi/read-snapshot-values raw-snapshot %))
-                view        (snapshot/consistent-view read-values keychain)
+                view        (snapshot/consistent-view {:read-values read-values :keychain keychain})
                 as-of       (revisions/as-of view "r-first")
                 pages       (revisions/fetch-pages-by-ids as-of {:ids #{1 2}})]
             (is (= "r-first" (revisions/revision-id as-of)))
@@ -110,7 +110,7 @@
             (is (Arrays/equals (byte-array [1]) (get pages 1)))
             (is (Arrays/equals (byte-array [2]) (get pages 2)))
             (is (= #{1 2}
-                   (revisions/changes-since view "r-second" "r-root"))))
+                   (revisions/changes-since view {:target-revision-id "r-second" :client-revision-id "r-root"}))))
           (finally
             (ffi/close-snapshot! raw-snapshot))))
       (finally
@@ -124,10 +124,10 @@
                      :database-page-count 2
                      :pages               {1 (byte-array [1])}}
         revision-key (key/revision (:revision-id revision))
-        values      {(seq revision-key) (codec/encode-revision keychain revision-key revision)}
+        values      {(seq revision-key) (codec/encode-revision keychain {:record-key revision-key :revision revision})}
         read-values (fn [record-keys]
                       (mapv #(values (seq %)) record-keys))
-        view        (snapshot/consistent-view read-values keychain)
+        view        (snapshot/consistent-view {:read-values read-values :keychain keychain})
         as-of       (revisions/as-of view "r-incomplete")]
     (try
       (revisions/fetch-pages-by-ids as-of {:ids #{2}})
@@ -145,13 +145,13 @@
                            (map (fn [revision]
                                   (let [revision-key (key/revision (:revision-id revision))]
                                     [(seq revision-key)
-                                     (codec/encode-revision keychain revision-key revision)]))
+                                     (codec/encode-revision keychain {:record-key revision-key :revision revision})]))
                                 revisions))
         read-values  (fn [record-keys]
                        (mapv #(values (seq %)) record-keys))
-        view         (snapshot/consistent-view read-values keychain)]
+        view         (snapshot/consistent-view {:read-values read-values :keychain keychain})]
     (try
-      (revisions/changes-since view "r-cycle-a" "r-missing")
+      (revisions/changes-since view {:target-revision-id "r-cycle-a" :client-revision-id "r-missing"})
       (is false "revision cycles must be rejected")
       (catch clojure.lang.ExceptionInfo error
         (is (= "Revision chain contains a cycle" (.getMessage error)))))))
@@ -163,10 +163,10 @@
                      :database-page-count 1
                      :pages {}}
         revision-key (key/revision (:revision-id revision))
-        values      {(seq revision-key) (codec/encode-revision keychain revision-key revision)}
+        values      {(seq revision-key) (codec/encode-revision keychain {:record-key revision-key :revision revision})}
         read-values (fn [record-keys]
                       (mapv #(values (seq %)) record-keys))
-        view        (snapshot/consistent-view read-values keychain)
+        view        (snapshot/consistent-view {:read-values read-values :keychain keychain})
         reason      (fn [f]
                       (try
                         (f)
@@ -175,6 +175,6 @@
     (is (= ::revisions/revision-not-found
            (reason #(revisions/as-of view "r-missing"))))
     (is (= ::revisions/invalid-revision-cursor
-           (reason #(revisions/changes-since view "r-head" "r-missing"))))
+           (reason #(revisions/changes-since view {:target-revision-id "r-head" :client-revision-id "r-missing"}))))
     (is (= ::revisions/head-not-found
            (reason #(snapshot/head-revision-id (constantly [nil])))))))

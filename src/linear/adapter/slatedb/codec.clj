@@ -18,14 +18,12 @@
   (some-> value cbor/decode))
 
 (defn- encrypt [keychain record-key value]
-  (keychain/encrypt keychain value {:associated-data record-key}))
+  (keychain/encrypt keychain {:associated-data record-key :value value}))
 
 (defn- decrypt-and-decode [keychain record-key value]
   (when value
     (try
-      (let [decoded (-> (keychain/decrypt keychain
-                          value
-                          {:associated-data record-key})
+      (let [decoded (-> (keychain/decrypt keychain {:associated-data record-key :ciphertext value})
                         cbor/decode)]
         (if (nil? decoded)
           (throw (IllegalStateException. "Decoded record is nil"))
@@ -37,21 +35,37 @@
                         cause))))))
 
 (defn encode-revision
-  {:malli/schema [:-> [:fn keychain/keychain?] bytes-schema :map bytes-schema]}
-  [keychain record-key revision]
+  {:malli/schema [:->
+                  [:fn keychain/keychain?]
+                  [:map [:record-key bytes-schema]
+                   [:revision :map]]
+                  bytes-schema]}
+  [keychain {:keys [record-key revision]}]
   (encrypt keychain record-key (cbor/encode revision)))
 
 (defn decode-revision
-  {:malli/schema [:-> [:fn keychain/keychain?] bytes-schema [:maybe bytes-schema] [:maybe :map]]}
-  [keychain record-key value]
+  {:malli/schema [:->
+                  [:fn keychain/keychain?]
+                  [:map [:record-key bytes-schema]
+                   [:value [:maybe bytes-schema]]]
+                  [:maybe :map]]}
+  [keychain {:keys [record-key value]}]
   (decrypt-and-decode keychain record-key value))
 
 (defn encode-page
-  {:malli/schema [:-> [:fn keychain/keychain?] bytes-schema bytes-schema bytes-schema]}
-  [keychain record-key page]
+  {:malli/schema [:->
+                  [:fn keychain/keychain?]
+                  [:map [:record-key bytes-schema]
+                   [:page bytes-schema]]
+                  bytes-schema]}
+  [keychain {:keys [record-key page]}]
   (encrypt keychain record-key (cbor/encode {:data page})))
 
 (defn decode-page
-  {:malli/schema [:-> [:fn keychain/keychain?] bytes-schema [:maybe bytes-schema] [:maybe bytes-schema]]}
-  [keychain record-key value]
+  {:malli/schema [:->
+                  [:fn keychain/keychain?]
+                  [:map [:record-key bytes-schema]
+                   [:value [:maybe bytes-schema]]]
+                  [:maybe bytes-schema]]}
+  [keychain {:keys [record-key value]}]
   (some-> (decrypt-and-decode keychain record-key value) :data))

@@ -19,7 +19,7 @@
 (defn- revision-metadata [read-values keychain revision-id]
   (let [record-key (key/revision revision-id)
         [value] (read-values [record-key])]
-    (codec/decode-revision keychain record-key value)))
+    (codec/decode-revision keychain {:record-key record-key :value value})))
 
 (defn- pages-at-revision [read-values keychain revision-id page-ids]
   (loop [revision-id revision-id
@@ -85,7 +85,7 @@
         values      (read-values record-keys)]
     (into {}
           (map (fn [page-id record-key value]
-                 [page-id (codec/decode-page keychain record-key value)])
+                 [page-id (codec/decode-page keychain {:record-key record-key :value value})])
                page-ids
                record-keys
                values))))
@@ -105,11 +105,12 @@
 
 (defn snapshot
   {:malli/schema [:->
-                  [:fn ifn?]
-                  ::revisions/revision-id
-                  [:fn keychain/keychain?]
+                  [:map
+                   [:read-values [:fn ifn?]]
+                   [:revision-id ::revisions/revision-id]
+                   [:keychain [:fn keychain/keychain?]]]
                   ::revisions/snapshot]}
-  [read-values revision-id keychain]
+  [{:keys [read-values revision-id keychain]}]
   (create-snapshot read-values
                    revision-id
                    keychain
@@ -139,5 +140,5 @@
                       target-revision-id
                       client-revision-id)))
 
-(defn consistent-view [read-values keychain]
+(defn consistent-view [{:keys [read-values keychain]}]
   (->ConsistentView read-values keychain))

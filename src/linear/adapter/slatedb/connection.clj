@@ -84,7 +84,7 @@
           (throw (add-suppressed! error cleanup-error)))))))
 
 (defn database
-  [{:keys [borrow-database return-database]} database-id]
+  [{:keys [borrow-database return-database]} {:keys [database-id]}]
   (let [raw-database (borrow-database database-id)
         closed?      (atom false)]
     (->DatabaseLease

@@ -200,7 +200,7 @@
 (defn- push-request? [request]
   (re-matches #"/d/[^/]+/v2/pipeline" (:uri request)))
 
-(defn wrap-request-body-limit [handler max-bytes]
+(defn wrap-request-body-limit [handler {:keys [max-bytes]}]
   (fn [{:keys [body] :as request}]
     (try
       (handler (if (and (push-request? request)
@@ -213,20 +213,18 @@
           (throw error))))))
 
 (defmethod ig/init-key ::request-body-limit [_ _]
-  #(wrap-request-body-limit % max-request-bytes))
+  #(wrap-request-body-limit % {:max-bytes max-request-bytes}))
 
 (defn- handle-batch [context request batch]
   (let [{:keys [command wire-indexes]}
         (parse-command {:body-size (request-content-length request)
                         :batch batch})]
     (try
-      (database/push! context
-                      (:id (:path-params request))
-                      command)
+      (database/push! context {:database-id (:id (:path-params request)) :command command})
       (hrana/batch-response (count (:steps batch)))
       (catch Exception error
         (if (hrana/statement-error? error)
-          (hrana/batch-error-response batch error wire-indexes)
+          (hrana/batch-error-response batch {:error error :wire-indexes wire-indexes})
           (throw error))))))
 
 (defn handler [context]

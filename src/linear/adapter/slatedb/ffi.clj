@@ -26,7 +26,7 @@
     (instance? Error$Internal error) ::anomaly/fault
     :else ::anomaly/fault))
 
-(defn classify-error [operation error]
+(defn classify-error [error {:keys [operation]}]
   (if (::anomaly/category (ex-data error))
     error
     (ex-info "SlateDB operation failed"
@@ -53,7 +53,7 @@
         (catch Exception error
           (p/rejected error)))
       (p/catch (fn [error]
-                 (throw (classify-error operation (unwrap-completion error)))))))
+                 (throw (classify-error (unwrap-completion error) {:operation operation}))))))
 
 (defn await [promise]
   (try
@@ -84,15 +84,15 @@
   (try
     (ObjectStore/resolve url)
     (catch LinkageError error
-      (throw (classify-error :open-object-store error)))
+      (throw (classify-error error {:operation :open-object-store})))
     (catch Exception error
-      (throw (classify-error :open-object-store error)))))
+      (throw (classify-error error {:operation :open-object-store})))))
 
 (defn close-object-store! [object-store]
   (try
     (.close ^ObjectStore object-store)
     (catch Exception error
-      (throw (classify-error :close-object-store error))))
+      (throw (classify-error error {:operation :close-object-store}))))
   nil)
 
 (defn open-database! [object-store database-id]
@@ -134,7 +134,7 @@
   (try
     (.close ^DbSnapshot snapshot)
     (catch Exception error
-      (throw (classify-error :close-snapshot error))))
+      (throw (classify-error error {:operation :close-snapshot}))))
   nil)
 
 (defn read-snapshot-values [snapshot keys]
@@ -162,5 +162,5 @@
   (try
     (.close ^DbTransaction transaction)
     (catch Exception error
-      (throw (classify-error :close-transaction error))))
+      (throw (classify-error error {:operation :close-transaction}))))
   nil)

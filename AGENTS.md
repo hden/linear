@@ -15,6 +15,9 @@ tips:
 
 do's & dont's:
 
+* Public `defn` APIs use an arg-map or `[target arg-map]`; map destructuring or the name `arg-map` identifies map arguments. Zero/one-argument value operations are allowed.
+* `bb lint` checks each public arity in `src`, `test`, and `scripts`. Positional/variadic exceptions require a qualified var, arity, and reason in `.clj-kondo/config.edn`; do not exempt namespaces.
+
 * 主張は全て hard-evidence によって裏付ける、逆に hard-evidence がない主張は hallucination と見なす
 * 再利用する必要がない　schema は named にせず inline で十分
 * 副作用と目的としない関数には bang (!) をつけない

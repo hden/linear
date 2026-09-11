@@ -50,7 +50,7 @@
                        (ex-info "SQLite statement failed"
                                 {:sqlite-message "UNIQUE constraint failed: u.y"
                                  :statement-index 2}))
-        response (hrana/batch-error-response {:steps [{} {} {}]} error)]
+        response (hrana/batch-error-response {:steps [{} {} {}]} {:error error})]
     (is (= 200 (:status response)))
     (is (= [true true false]
            (mapv some?
@@ -66,7 +66,7 @@
                        {}
                        (ex-info "SQLite statement failed"
                                 {:statement-index 0}))
-        response (hrana/batch-error-response {:steps [{} {} {}]} error [2])]
+        response (hrana/batch-error-response {:steps [{} {} {}]} {:error error :wire-indexes [2]})]
     (is (= [true true false]
            (mapv some?
                  (get-in response [:body :results 0 :response :result :step_results]))))

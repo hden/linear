@@ -21,27 +21,21 @@
   (-id keychain))
 
 (defn encrypt
-  {:malli/schema [:function
-                  [:-> ::keychain :any [:fn bytes?]]
-                  [:->
-                   ::keychain
-                   :any
-                   [:map [:associated-data {:optional true} [:fn bytes?]]]
-                   [:fn bytes?]]]}
-  ([keychain x]
-   (-encrypt keychain x {}))
-  ([keychain x options]
-   (-encrypt keychain x options)))
+  {:malli/schema [:->
+                  ::keychain
+                  [:map
+                   [:value :any]
+                   [:associated-data {:optional true} [:fn bytes?]]]
+                  [:fn bytes?]]}
+  [keychain {:keys [value] :as options}]
+  (-encrypt keychain value (dissoc options :value)))
 
 (defn decrypt
-  {:malli/schema [:function
-                  [:-> ::keychain [:fn bytes?] :any]
-                  [:->
-                   ::keychain
-                   [:fn bytes?]
-                   [:map [:associated-data {:optional true} [:fn bytes?]]]
-                   :any]]}
-  ([keychain ciphertext]
-   (-decrypt keychain ciphertext {}))
-  ([keychain ciphertext options]
-   (-decrypt keychain ciphertext options)))
+  {:malli/schema [:->
+                  ::keychain
+                  [:map
+                   [:ciphertext [:fn bytes?]]
+                   [:associated-data {:optional true} [:fn bytes?]]]
+                  :any]}
+  [keychain {:keys [ciphertext] :as options}]
+  (-decrypt keychain ciphertext (dissoc options :ciphertext)))

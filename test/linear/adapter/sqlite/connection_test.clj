@@ -17,10 +17,8 @@
     (try
       (let [invocation (vfs/mount resources
                                   {:path       path
-                                   :filesystem (evaluation/evaluation
-                                                 (sqlite-data/snapshot
-                                                   {:image (sqlite-data/sqlite-image)})
-                                                 path)})]
+                                   :filesystem (evaluation/evaluation (sqlite-data/snapshot
+                                                                        {:image (sqlite-data/sqlite-image)}) {:path path})})]
         (try
           (let [database (connection/open {:path     path
                                            :vfs-name (:name resources)})]

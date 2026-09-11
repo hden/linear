@@ -3,7 +3,8 @@
    [clojure.java.io :as io]
    [clojure.test :as test :refer [deftest is]]
    [linear.architecture :as architecture]
-   [linear.architecture-var :as architecture-var]))
+   [linear.architecture-var :as architecture-var]
+   [linear.public-api-test]))
 
 (defn- dependency [from to row]
   {:namespace from
@@ -67,6 +68,6 @@
                    violations))))))
 
 (defn -main [& _]
-  (let [{:keys [fail error]} (test/run-tests 'linear.architecture-test)]
+  (let [{:keys [fail error]} (test/run-tests 'linear.architecture-test 'linear.public-api-test)]
     (when (pos? (+ fail error))
       (System/exit 1))))

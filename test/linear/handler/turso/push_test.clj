@@ -2,6 +2,7 @@
   (:require
    [clojure.test :refer [deftest is]]
    [cognitect.anomalies :as anomaly]
+   [integrant.core :as ig]
    [linear.handler.turso.push :as push]
    [linear.test :as test])
   (:import
@@ -126,11 +127,10 @@
     (is (= 400 (:status response)))))
 
 (deftest request-body-limit-rejects-an-underreported-body
-  (let [handler (push/wrap-request-body-limit
-                  (fn [{:keys [body]}]
-                    (while (not= -1 (.read ^java.io.InputStream body)))
-                    {:status 200})
-                  (* 16 1024 1024))
+  (let [middleware (ig/init-key ::push/request-body-limit {})
+        handler (middleware (fn [{:keys [body]}]
+                              (while (not= -1 (.read ^java.io.InputStream body)))
+                              {:status 200}))
         response (handler {:uri "/d/d-01M11GV3ER6E777ERMD0DK7CA1/v2/pipeline"
                            :body (ByteArrayInputStream.
                                    (byte-array (inc (* 16 1024 1024))))
@@ -150,10 +150,8 @@
                                      (.read body buffer)
                                      (vec buffer)))
                                  [1 2 3]]]]
-    (let [handler (push/wrap-request-body-limit
-                    (fn [{:keys [body]}]
-                      {:status 200 :body (read-body body)})
-                    3)
+    (let [handler (push/wrap-request-body-limit (fn [{:keys [body]}]
+                                                  {:status 200 :body (read-body body)}) {:max-bytes 3})
           response (handler {:uri "/d/d-01M11GV3ER6E777ERMD0DK7CA1/v2/pipeline"
                              :body (ByteArrayInputStream. (byte-array [1 2 3]))})]
       (is (= 200 (:status response)))
@@ -161,9 +159,7 @@
 
 (deftest request-body-limit-propagates-unrelated-handler-errors
   (let [error   (ex-info "unrelated failure" {:reason ::unrelated-failure})
-        handler (push/wrap-request-body-limit
-                  (fn [_] (throw error))
-                  3)
+        handler (push/wrap-request-body-limit (fn [_] (throw error)) {:max-bytes 3})
         thrown  (try
                   (handler {:uri "/d/d-01M11GV3ER6E777ERMD0DK7CA1/v2/pipeline"})
                   (catch clojure.lang.ExceptionInfo exception exception))]

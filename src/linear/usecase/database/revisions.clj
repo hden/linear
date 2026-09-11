@@ -65,15 +65,13 @@
 (defmethod spec-for ::consistent-readable [_]
   [:fn consistent-readable?])
 
-(defn read-consistently [reader f database]
+(defn read-consistently [reader {:keys [f database]}]
   (-read-consistently reader f database))
 
 (defmacro with-consistent-view
   [[binding reader database] & body]
-  `(read-consistently ~reader
-                      (fn [~binding]
-                        ~@body)
-                      ~database))
+  `(read-consistently ~reader {:f (fn [~binding]
+                                    ~@body) :database ~database}))
 
 (defn head
   {:malli/schema [:-> ::consistent-view ::snapshot]}
@@ -86,8 +84,12 @@
   (-as-of view revision-id))
 
 (defn changes-since
-  {:malli/schema [:-> ::consistent-view ::revision-id ::revision-id [:set ::page-id]]}
-  [view target-revision-id client-revision-id]
+  {:malli/schema [:-> ::consistent-view
+                  [:map
+                   [:target-revision-id ::revision-id]
+                   [:client-revision-id ::revision-id]]
+                  [:set ::page-id]]}
+  [view {:keys [target-revision-id client-revision-id]}]
   (-changes-since view
                   target-revision-id
                   client-revision-id))
@@ -104,10 +106,11 @@
 (defn publish-next!
   {:malli/schema [:->
                   ::revision-writable
-                  ::revision
                   [:map
-                   [:id :string]
-                   [:vault [:map [:keychain :any]]]]
+                   [:revision ::revision]
+                   [:database [:map
+                               [:id :string]
+                               [:vault [:map [:keychain :any]]]]]]
                   ::revision]}
-  [writer revision database]
+  [writer {:keys [revision database]}]
   (-publish-next! writer revision database))

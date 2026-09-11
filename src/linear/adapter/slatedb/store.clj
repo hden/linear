@@ -16,11 +16,11 @@
   (let [revision-id  (:revision-id revision)
         revision-key (key/revision revision-id)]
     (into [[revision-key
-            (codec/encode-revision keychain revision-key revision)]]
+            (codec/encode-revision keychain {:record-key revision-key :revision revision})]]
           (concat
             (map (fn [[page-id page]]
                    (let [page-key (key/page page-id)]
-                     [page-key (codec/encode-page keychain page-key page)]))
+                     [page-key (codec/encode-page keychain {:record-key page-key :page page})]))
                  (:pages revision))
             [[(key/head) (codec/encode-head {:revision-id revision-id})]]))))
 
@@ -54,7 +54,7 @@
   (let [database-id (:id database)
         keychain    (get-in database [:vault :keychain])]
     (with-open [^AutoCloseable leased-database
-                (connection/database store database-id)
+                (connection/database store {:database-id database-id})
                 ^DbTransaction transaction
                 (connection/writable-transaction leased-database)]
       (try
@@ -78,11 +78,11 @@
 
 (defn- with-consistent-view [store database f]
   (with-open [^AutoCloseable leased-database
-              (connection/database store (:id database))]
+              (connection/database store {:database-id (:id database)})]
     (let [raw-snapshot (connection/read-only-snapshot leased-database)]
       (try
         (let [read-values #(ffi/await (ffi/read-snapshot-values raw-snapshot %))
-              view (snapshot/consistent-view read-values (get-in database [:vault :keychain]))]
+              view (snapshot/consistent-view {:read-values read-values :keychain (get-in database [:vault :keychain])})]
           (f view))
         (finally
           (ffi/close-snapshot! raw-snapshot))))))

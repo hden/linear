@@ -29,13 +29,11 @@
       ;; the official client for partial-sync query strategy. The official
       ;; CLI sync server does not implement these selectors yet.
       (let [pull (protobuf/decode-pull (body-bytes body))
-            result  (database/pull
-                      context
-                      (:id path-params)
-                      {:server-revision (not-empty (:server-revision pull))
-                       :client-revision (not-empty (:client-revision pull))
-                       :page-ids (protobuf/decode-page-selector
-                                   (:server-pages-selector pull))})]
+            result  (database/pull context {:server-revision (not-empty (:server-revision pull))
+                                            :client-revision (not-empty (:client-revision pull))
+                                            :page-ids (protobuf/decode-page-selector
+                                                        (:server-pages-selector pull))
+                                            :database-id (:id path-params)})]
         {:status 200
          :headers {"content-type" "application/octet-stream"}
          :body (protobuf/pull-stream result)})

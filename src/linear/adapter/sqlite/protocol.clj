@@ -66,7 +66,7 @@
                   [:map
                    [:file ::file]
                    [:mode [:enum :read-only :read-write]]]]}
-  [filesystem request]
+  [filesystem {:as request}]
   (-open filesystem request))
 
 (defn delete
@@ -74,7 +74,7 @@
                   ::filesystem
                   [:map [:path ::path]]
                   :nil]}
-  [filesystem request]
+  [filesystem {:as request}]
   (-delete filesystem request))
 
 (defn access
@@ -84,7 +84,7 @@
                    [:path ::path]
                    [:mode [:enum :exists :read :read-write]]]
                   :boolean]}
-  [filesystem request]
+  [filesystem {:as request}]
   (-access filesystem request))
 
 (defn full-path
@@ -92,7 +92,7 @@
                   ::filesystem
                   [:map [:path ::path]]
                   ::path]}
-  [filesystem request]
+  [filesystem {:as request}]
   (-full-path filesystem request))
 
 (defn close

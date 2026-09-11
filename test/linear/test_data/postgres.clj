@@ -13,8 +13,8 @@
            vault-id       (str "v-" (random-uuid))
            transaction-id (str "tx-" (random-uuid))
            attributes-id  (str "a-" (random-uuid))}}]
-  (let [ciphertext (keychain/encrypt master-key keychain
-                                     {:associated-data (.getBytes ^String vault-id "UTF-8")})]
+  (let [ciphertext (keychain/encrypt master-key {:associated-data (.getBytes ^String vault-id "UTF-8")
+                                                 :value keychain})]
     (jdbc/with-transaction [tx datasource]
       (jdbc/execute! tx ["INSERT INTO transactions (id) VALUES (?)" transaction-id])
       (jdbc/execute! tx

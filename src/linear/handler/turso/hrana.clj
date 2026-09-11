@@ -97,28 +97,26 @@
   (contains? (error-data error) :statement-index))
 
 (defn batch-error-response
-  ([batch error]
-   (batch-error-response batch error nil))
-  ([batch error wire-indexes]
-   (let [step-count  (count (:steps batch))
-         domain-index (or (:statement-index (error-data error)) 0)
-         error-index (if wire-indexes
-                       (get wire-indexes domain-index domain-index)
-                       domain-index)
-         step-results (assoc (vec (repeat step-count (ok-step-result)))
-                             error-index
-                             nil)
-         step-errors (assoc (vec (repeat step-count nil))
+  [batch {:keys [error wire-indexes]}]
+  (let [step-count  (count (:steps batch))
+        domain-index (or (:statement-index (error-data error)) 0)
+        error-index (if wire-indexes
+                      (get wire-indexes domain-index domain-index)
+                      domain-index)
+        step-results (assoc (vec (repeat step-count (ok-step-result)))
                             error-index
-                            {:message (error-message error)
-                             :code "BATCH_STEP_ERROR"})]
-     {:status 200
-      :headers (content-type)
-      :body {:baton nil
-             :base_url nil
-             :results [{:type "ok"
-                        :response (batch-result step-results
-                                                step-errors)}]}})))
+                            nil)
+        step-errors (assoc (vec (repeat step-count nil))
+                           error-index
+                           {:message (error-message error)
+                            :code "BATCH_STEP_ERROR"})]
+    {:status 200
+     :headers (content-type)
+     :body {:baton nil
+            :base_url nil
+            :results [{:type "ok"
+                       :response (batch-result step-results
+                                               step-errors)}]}}))
 
 (defn error-response [error]
   (let [category (::anomaly/category (ex-data error))

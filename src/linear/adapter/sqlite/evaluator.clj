@@ -100,7 +100,7 @@
     (begin-evaluation! state)
     (try
       (let [path       (str "/linear/" (ulid) ".db")
-            filesystem (evaluation/evaluation snapshot path)
+            filesystem (evaluation/evaluation snapshot {:path path})
             invocation (vfs/mount resources {:path path :filesystem filesystem})]
         (try
           (let [database (call-sqlite invocation

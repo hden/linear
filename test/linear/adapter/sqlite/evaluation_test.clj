@@ -48,7 +48,7 @@
   (sqlite/access filesystem {:path path :mode :exists}))
 
 (deftest routes-main-and-wal-files-without-file-identifiers
-  (let [filesystem (evaluation/evaluation snapshot "/linear/eval.db")
+  (let [filesystem (evaluation/evaluation snapshot {:path "/linear/eval.db"})
         main       (open-file filesystem "/linear/eval.db" :read-only :main-db)
         wal        (open-file filesystem "/linear/eval.db-wal" :read-write :wal)]
     (is (identical? main (open-file filesystem "/linear/eval.db" :read-only :main-db)))
@@ -59,7 +59,7 @@
                  (open-file filesystem "/linear/eval.db-shm" :read-write :transient-db)))))
 
 (deftest access-and-delete-reflect-wal-state
-  (let [filesystem (evaluation/evaluation snapshot "/linear/eval.db")
+  (let [filesystem (evaluation/evaluation snapshot {:path "/linear/eval.db"})
         wal        (open-file filesystem "/linear/eval.db-wal" :read-write :wal)]
     (is (true? (accessible? filesystem "/linear/eval.db")))
     (is (false? (accessible? filesystem "/linear/eval.db-wal")))
@@ -71,7 +71,7 @@
            (sqlite/full-path filesystem {:path "/linear/eval.db"})))))
 
 (deftest requires-exactly-one-commit
-  (let [filesystem (evaluation/evaluation snapshot "/linear/eval.db")
+  (let [filesystem (evaluation/evaluation snapshot {:path "/linear/eval.db"})
         missing    (try
                      (evaluation/commit filesystem)
                      nil
@@ -79,7 +79,7 @@
                        exception))]
     (is (= ::anomaly/incorrect (-> missing ex-data ::anomaly/category)))
     (is (= ::evaluation/missing-commit (:reason (ex-data missing)))))
-  (let [filesystem (evaluation/evaluation snapshot "/linear/eval.db")
+  (let [filesystem (evaluation/evaluation snapshot {:path "/linear/eval.db"})
         wal-file   (open-file filesystem "/linear/eval.db-wal" :read-write :wal)]
     (sqlite/write wal-file 0 (wal-header))
     (sqlite/write wal-file 32 (commit-frame 1 1))

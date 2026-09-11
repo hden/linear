@@ -61,17 +61,17 @@
                                  :keychain keychain
                                  :pages (sqlite-data/pages {:image (sqlite-data/sqlite-image)})})
       (let [first-revision
-            (database/push! context database-id
-                            {:statements [{:sql "UPDATE t SET value = ? WHERE id = 1"
-                                           :parameters ["first"]}]})
+            (database/push! context {:database-id database-id
+                                     :command {:statements [{:sql "UPDATE t SET value = ? WHERE id = 1"
+                                                             :parameters ["first"]}]}})
             second-revision
-            (database/push! context database-id
-                            {:statements
-                             [{:sql (str "SELECT CASE WHEN value = ? THEN 1 "
-                                         "ELSE abs(-9223372036854775808) END FROM t WHERE id = 1")
-                               :parameters ["first"]}
-                              {:sql "UPDATE t SET value = ? WHERE id = 1"
-                               :parameters ["second"]}]})]
+            (database/push! context {:database-id database-id
+                                     :command {:statements
+                                               [{:sql (str "SELECT CASE WHEN value = ? THEN 1 "
+                                                           "ELSE abs(-9223372036854775808) END FROM t WHERE id = 1")
+                                                 :parameters ["first"]}
+                                                {:sql "UPDATE t SET value = ? WHERE id = 1"
+                                                 :parameters ["second"]}]}})]
         (is (= "r-root" (:parent first-revision)))
         (is (= (:revision-id first-revision) (:parent second-revision)))))))
 
@@ -141,7 +141,7 @@
                                        :vault-id vault-id
                                        :transaction-id tx-id
                                        :attributes-id attributes-id})
-      (let [revision (database/push! context database-id command)]
+      (let [revision (database/push! context {:database-id database-id :command command})]
         (is (= "r-next" (:revision-id revision)))
         (let [[[_ database-at-read]
                _
@@ -205,13 +205,10 @@
                               :parent parent
                               :database-page-count 1
                               :pages {}})))
-          result       (database/push!
-                         (application-context datasource
-                                              master-key
-                                              store
-                                              evaluator)
-                         database-id
-                         {:statements []})]
+          result       (database/push! (application-context datasource
+                                         master-key
+                                         store
+                                         evaluator) {:database-id database-id :command {:statements []}})]
       (is (= "r-second-next" (:revision-id result)))
       (is (= ["r-first" "r-second"] @evaluated))
       (is (= ["Primary" "Renamed"] @resolved-names))
@@ -239,13 +236,10 @@
                           :database-page-count 1
                           :pages {}}))
           error      (try
-                       (database/push!
-                         (application-context datasource
-                                              master-key
-                                              store
-                                              evaluator)
-                         database-id
-                         {:statements []})
+                       (database/push! (application-context datasource
+                                         master-key
+                                         store
+                                         evaluator) {:database-id database-id :command {:statements []}})
                        nil
                        (catch clojure.lang.ExceptionInfo failure
                          failure))]
@@ -273,13 +267,10 @@
                       (-evaluate [_ _]
                         (throw (IllegalStateException. "must not evaluate"))))
           error     (try
-                      (database/push!
-                        (application-context datasource
-                                             master-key
-                                             store
-                                             evaluator)
-                        database-id
-                        {:statements []})
+                      (database/push! (application-context datasource
+                                        master-key
+                                        store
+                                        evaluator) {:database-id database-id :command {:statements []}})
                       nil
                       (catch clojure.lang.ExceptionInfo caught
                         caught))]
@@ -310,13 +301,10 @@
                          :database-page-count 1
                          :pages {}}))
           error     (try
-                      (database/push!
-                        (application-context datasource
-                                             master-key
-                                             store
-                                             evaluator)
-                        database-id
-                        {:statements []})
+                      (database/push! (application-context datasource
+                                        master-key
+                                        store
+                                        evaluator) {:database-id database-id :command {:statements []}})
                       nil
                       (catch clojure.lang.ExceptionInfo caught
                         caught))]

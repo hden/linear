@@ -25,23 +25,23 @@
   (let [revision-id  (:revision-id revision)
         revision-key (key/revision revision-id)]
     (into [[revision-key
-            (codec/encode-revision keychain revision-key revision)]]
+            (codec/encode-revision keychain {:record-key revision-key :revision revision})]]
           (concat
             (map (fn [[page-id page]]
                    (let [page-key (key/page page-id)]
-                     [page-key (codec/encode-page keychain page-key page)]))
+                     [page-key (codec/encode-page keychain {:record-key page-key :page page})]))
                  (:pages revision))
             [[(key/head) (codec/encode-head {:revision-id revision-id})]]))))
 
 (defn- seed! [store keychain revision]
-  (with-open [database    (connection/database store "d-1")
+  (with-open [database    (connection/database store {:database-id "d-1"})
               transaction (connection/writable-transaction database)]
     (ffi/await (ffi/write-values transaction
                                  (revision-records keychain revision)))
     (ffi/await (ffi/commit-transaction transaction))))
 
 (defn- read-records [store record-keys]
-  (with-open [database    (connection/database store "d-1")
+  (with-open [database    (connection/database store {:database-id "d-1"})
               transaction (connection/writable-transaction database)]
     (try
       (ffi/await (ffi/read-transaction-values transaction record-keys))
@@ -53,7 +53,7 @@
                                    :max-open-databases 1})
         keychain (crypto/keychain (tempel/keychain))]
     (try
-      (with-open [leased-database (connection/database store "d-1")
+      (with-open [leased-database (connection/database store {:database-id "d-1"})
                   transaction     (connection/writable-transaction leased-database)]
         (ffi/await
           (ffi/write-values transaction [[(key/head) (byte-array [0])]]))
@@ -62,7 +62,7 @@
                    (revisions/with-consistent-view
                      [view store (database-record keychain)]
                      (revisions/head view))))
-      (with-open [leased-database (connection/database store "d-1")
+      (with-open [leased-database (connection/database store {:database-id "d-1"})
                   transaction     (connection/writable-transaction leased-database)]
         (is (some? transaction)))
       (finally
@@ -84,19 +84,17 @@
     (try
       (seed! store keychain root)
       (is (= revision
-             (revisions/publish-next! store revision database)))
+             (revisions/publish-next! store {:revision revision :database database})))
       (let [[head-value revision-value page-value]
             (read-records store [(key/head)
                                  (key/revision "r-next")
                                  (key/page 1)])]
         (is (= {:revision-id "r-next"} (codec/decode-head head-value)))
         (is (= (dissoc revision :pages)
-               (dissoc (codec/decode-revision keychain
-                                              (key/revision "r-next")
-                                              revision-value)
+               (dissoc (codec/decode-revision keychain {:record-key (key/revision "r-next") :value revision-value})
                        :pages)))
         (is (Arrays/equals (byte-array [2])
-                           (codec/decode-page keychain (key/page 1) page-value))))
+                           (codec/decode-page keychain {:record-key (key/page 1) :value page-value}))))
       (finally
         (connection/close store)))))
 
@@ -116,7 +114,7 @@
     (try
       (seed! store keychain root)
       (let [error (try
-                    (revisions/publish-next! store stale database)
+                    (revisions/publish-next! store {:revision stale :database database})
                     (catch clojure.lang.ExceptionInfo failure
                       failure))]
         (is (= ::anomaly/conflict (-> error ex-data ::anomaly/category)))
@@ -128,7 +126,7 @@
         (is (= {:revision-id "r-root"} (codec/decode-head head-value)))
         (is (nil? revision-value))
         (is (Arrays/equals (byte-array [1])
-                           (codec/decode-page keychain (key/page 1) page-value))))
+                           (codec/decode-page keychain {:record-key (key/page 1) :value page-value}))))
       (finally
         (connection/close store)))))
 
@@ -173,17 +171,17 @@
     (try
       (seed! store keychain root)
       (is (= first
-             (revisions/publish-next! store first database)))
+             (revisions/publish-next! store {:revision first :database database})))
       (is (= second
-             (revisions/publish-next! store second database)))
+             (revisions/publish-next! store {:revision second :database database})))
       (revisions/with-consistent-view [view store database]
         (let [as-of (revisions/as-of view "r-first")]
           (is (= "r-first" (revisions/revision-id as-of)))
           (is (= 2 (revisions/size as-of))))
         (is (= #{1 2}
-               (revisions/changes-since view "r-second" "r-root")))
+               (revisions/changes-since view {:target-revision-id "r-second" :client-revision-id "r-root"})))
         (is (thrown? clojure.lang.ExceptionInfo
-                     (revisions/changes-since view "r-second" "r-missing"))))
+                     (revisions/changes-since view {:target-revision-id "r-second" :client-revision-id "r-missing"}))))
       (finally
         (connection/close store)))))
 
@@ -205,15 +203,13 @@
           database (database-record (crypto/keychain (tempel/keychain)))]
       (try
         (let [caught (try
-                       (revisions/read-consistently observed-store
-                         (fn [_] (throw failure))
-                         database)
+                       (revisions/read-consistently observed-store {:f (fn [_] (throw failure)) :database database})
                        (catch Exception error error)
                        (catch AssertionError error error))]
           (is (identical? failure caught))
           (is (= 1 @returned))
           (when (= 1 @returned)
-            (with-open [lease (connection/database store "d-1")]
+            (with-open [lease (connection/database store {:database-id "d-1"})]
               (is (some? lease)))))
         (finally
           (when (and @borrowed (zero? @returned))

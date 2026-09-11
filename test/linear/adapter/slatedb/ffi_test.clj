@@ -25,7 +25,7 @@
            [:unknown-close (Error$Closed. CloseReason/UNKNOWN "unknown") ::anomaly/fault]
            [:unexpected (IllegalStateException. "unexpected") ::anomaly/fault]]]
     (testing (name label)
-      (let [error (ffi/classify-error :commit-transaction cause)]
+      (let [error (ffi/classify-error cause {:operation :commit-transaction})]
         (is (= category (::anomaly/category (ex-data error))))
         (is (= :slatedb (:linear.error/source (ex-data error))))
         (is (= :commit-transaction (:linear.error/operation (ex-data error))))
@@ -33,12 +33,10 @@
 
 (deftest preserves-anomaly-bearing-errors
   (let [error (ex-info "invalid SQL" {::anomaly/category ::anomaly/incorrect})]
-    (is (identical? error (ffi/classify-error :read-values error)))))
+    (is (identical? error (ffi/classify-error error {:operation :read-values})))))
 
 (deftest identifies-a-fenced-database-handle
-  (let [error (ffi/classify-error
-                :read-snapshot-values
-                (Error$Closed. CloseReason/FENCED "fenced"))]
+  (let [error (ffi/classify-error (Error$Closed. CloseReason/FENCED "fenced") {:operation :read-snapshot-values})]
     (is (= ::ffi/fenced (:reason (ex-data error))))
     (is (ffi/fenced? error))))
 
