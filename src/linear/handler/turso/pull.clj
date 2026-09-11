@@ -6,13 +6,20 @@
   (:import
    (java.io InputStream)))
 
+(def ^:private ^:const max-request-bytes (* 16 1024 1024))
+
 (defn- body-bytes [body]
-  (cond
-    (bytes? body) body
-    (instance? InputStream body) (.readAllBytes ^InputStream body)
-    (nil? body) (byte-array 0)
-    :else (throw (ex-info "Pull request body is not an input stream"
-                          {::anomaly/category ::anomaly/incorrect}))))
+  (let [data (cond
+               (bytes? body) body
+               (instance? InputStream body) (.readNBytes ^InputStream body (inc max-request-bytes))
+               (nil? body) (byte-array 0)
+               :else (throw (ex-info "Pull request body is not an input stream"
+                                     {::anomaly/category ::anomaly/incorrect})))]
+    (when (> (alength ^bytes data) max-request-bytes)
+      (throw (ex-info "Pull request is too large"
+                      {::anomaly/category ::anomaly/incorrect
+                       :reason ::request-too-large})))
+    data))
 
 (defn- error-response [error]
   {:status (if (#{::anomaly/incorrect ::anomaly/not-found}
