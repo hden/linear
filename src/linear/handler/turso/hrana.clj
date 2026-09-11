@@ -2,8 +2,12 @@
   (:require
    [cognitect.anomalies :as anomaly]))
 
-(defn- content-type []
-  {"content-type" "application/json"})
+(defn- pipeline-response [status result]
+  {:status status
+   :headers {"content-type" "application/json"}
+   :body {:baton nil
+          :base_url nil
+          :results [result]}})
 
 (def ^:private last-change-id-query
   "SELECT pull_gen, change_id FROM turso_sync_last_change_id WHERE client_id = ?")
@@ -35,34 +39,28 @@
             :replication_index nil}})
 
 (defn batch-response [step-count]
-  {:status 200
-   :headers (content-type)
-   :body {:baton nil
-          :base_url nil
-          :results [{:type "ok"
-                     :response (batch-result (vec (repeat step-count
-                                                          (ok-step-result)))
-                                             (vec (repeat step-count nil)))}]}})
+  (pipeline-response 200
+                     {:type "ok"
+                      :response (batch-result (vec (repeat step-count
+                                                           (ok-step-result)))
+                                              (vec (repeat step-count nil)))}))
 
 (defn last-change-id-response []
-  {:status 200
-   :headers (content-type)
-   :body {:baton nil
-          :base_url nil
-          :results [{:type "ok"
-                     :response
-                     (batch-result [{:cols [{:name "pull_gen"
-                                             :decltype "INTEGER"}
-                                            {:name "change_id"
-                                             :decltype "INTEGER"}]
-                                     :rows []
-                                     :affected_row_count 0
-                                     :last_insert_rowid nil
-                                     :replication_index nil
-                                     :rows_read 0
-                                     :rows_written 0
-                                     :query_duration_ms 0.0}]
-                                   [nil])}]}})
+  (pipeline-response 200
+    {:type "ok"
+     :response
+     (batch-result [{:cols [{:name "pull_gen"
+                             :decltype "INTEGER"}
+                            {:name "change_id"
+                             :decltype "INTEGER"}]
+                     :rows []
+                     :affected_row_count 0
+                     :last_insert_rowid nil
+                     :replication_index nil
+                     :rows_read 0
+                     :rows_written 0
+                     :query_duration_ms 0.0}]
+                   [nil])}))
 
 (defn single-batch [pipeline]
   (let [batches (keep #(when (= "batch" (:type %)) (:batch %))
@@ -110,13 +108,10 @@
                            error-index
                            {:message (error-message error)
                             :code "BATCH_STEP_ERROR"})]
-    {:status 200
-     :headers (content-type)
-     :body {:baton nil
-            :base_url nil
-            :results [{:type "ok"
-                       :response (batch-result step-results
-                                               step-errors)}]}}))
+    (pipeline-response 200
+                       {:type "ok"
+                        :response (batch-result step-results
+                                                step-errors)})))
 
 (defn error-response [error]
   (let [category (::anomaly/category (ex-data error))
@@ -124,9 +119,6 @@
                    ::anomaly/incorrect 400
                    ::anomaly/conflict 409
                    500)]
-    {:status status
-     :headers (content-type)
-     :body {:baton nil
-            :base_url nil
-            :results [{:type "error"
-                       :error {:message (error-message error)}}]}}))
+    (pipeline-response status
+                       {:type "error"
+                        :error {:message (error-message error)}})))

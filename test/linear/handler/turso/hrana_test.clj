@@ -12,6 +12,10 @@
 (deftest successful-batch-response-preserves-step-count
   (let [response (hrana/batch-response 2)]
     (is (= 200 (:status response)))
+    (is (= {"content-type" "application/json"} (:headers response)))
+    (is (= {:baton nil :base_url nil}
+           (dissoc (:body response) :results)))
+    (is (= 1 (count (get-in response [:body :results]))))
     (is (= "ok" (get-in response [:body :results 0 :type])))
     (is (= 2 (count (get-in response [:body :results 0 :response
                                       :result :step_results]))))
