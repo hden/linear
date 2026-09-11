@@ -173,15 +173,9 @@
        (empty? (:callbacks state))))
 
 (defn- signal-if-drained! [state]
-  (let [signal (volatile! nil)]
-    (swap! state
-           (fn [current]
-             (when (and (= :draining (:status current))
-                        (quiescent? current))
-               (vreset! signal (:drained current)))
-             current))
-    (when-let [drained @signal]
-      (deliver drained true))))
+  (when (and (= :draining (:status state))
+             (quiescent? state))
+    (deliver (:drained state) true)))
 
 (defn- callback-watchdog [resources callback-id context]
   (let [completion (p/deferred)]
@@ -204,9 +198,9 @@
         (record-callback-failure! resources invocation context error)
         ffi/sqlite-ioerr)
       (finally
-        (swap! (:state resources) update :callbacks dissoc callback-id)
-        (p/resolve completion)
-        (signal-if-drained! (:state resources))))))
+        (let [state (swap! (:state resources) update :callbacks dissoc callback-id)]
+          (p/resolve completion)
+          (signal-if-drained! state))))))
 
 (defn- protect-file-callback [resources operation implementation]
   (fn [native-file & arguments]
@@ -562,17 +556,17 @@
 (defn unmount
   {:malli/schema [:-> ::invocation :nil]}
   [{:keys [resources path] :as invocation}]
-  (let [paths (mounted-paths path)]
-    (swap! (:state resources)
-           (fn [state]
-             (-> state
-                 (update :paths #(apply dissoc % paths))
-                 (update :files (fn [files]
-                                  (into {}
-                                        (remove (fn [[_ route]]
-                                                  (identical? invocation (:invocation route))))
-                                        files)))))))
-  (signal-if-drained! (:state resources))
+  (let [paths (mounted-paths path)
+        state (swap! (:state resources)
+                (fn [state]
+                  (-> state
+                      (update :paths #(apply dissoc % paths))
+                      (update :files (fn [files]
+                                       (into {}
+                                             (remove (fn [[_ route]]
+                                                       (identical? invocation (:invocation route))))
+                                             files))))))]
+    (signal-if-drained! state))
   nil)
 
 (defn ok?
@@ -583,13 +577,13 @@
 (defn drain!
   {:malli/schema [:-> ::resources :nil]}
   [resources]
-  (swap! (:state resources)
-         (fn [state]
-           (case (:status state)
-             :ready (assoc state :status :draining)
-             :draining state
-             state)))
-  (signal-if-drained! (:state resources))
+  (let [state (swap! (:state resources)
+                (fn [state]
+                  (case (:status state)
+                    :ready (assoc state :status :draining)
+                    :draining state
+                    state)))]
+    (signal-if-drained! state))
   nil)
 
 (defn uninstall
