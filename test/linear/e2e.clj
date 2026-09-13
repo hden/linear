@@ -13,6 +13,8 @@
    [next.jdbc :as jdbc]
    [taoensso.tempel :as tempel])
   (:import
+   (java.lang ProcessHandle)
+   (java.util.concurrent TimeUnit TimeoutException)
    (org.eclipse.jetty.server NetworkConnector)))
 
 (defn- read-config [file]
@@ -71,13 +73,54 @@
     (str "http://127.0.0.1:" port "/d/"
          database-id)))
 
+(defn- stop-client! [processes]
+  (let [deadline (+ (System/nanoTime) (.toNanos TimeUnit/SECONDS 5))]
+    (doseq [^ProcessHandle process processes]
+      (.destroyForcibly process))
+    (doseq [^ProcessHandle process processes
+            :when (.isAlive process)]
+      (try
+        (.get (.onExit process)
+              (max 0 (- deadline (System/nanoTime)))
+              TimeUnit/NANOSECONDS)
+        (catch TimeoutException error
+          (throw (ex-info "JavaScript Turso sync E2E cleanup timed out after 5000 ms"
+                          {:timeout-ms 5000 :pid (.pid process)}
+                          error)))))))
+
+(defn- wait-client! [^Process process timeout-ms]
+  (let [deadline (+ (System/nanoTime) (.toNanos TimeUnit/MILLISECONDS timeout-ms))
+        descendants (volatile! #{})
+        succeeded? (volatile! false)]
+    (try
+      (loop []
+        (with-open [stream (.descendants process)]
+          (vswap! descendants into (iterator-seq (.iterator stream))))
+        (let [remaining (- deadline (System/nanoTime))]
+          (when-not (and (pos? remaining)
+                         (.waitFor process
+                                   (min remaining (.toNanos TimeUnit/MILLISECONDS 50))
+                                   TimeUnit/NANOSECONDS))
+            (if (pos? (- deadline (System/nanoTime)))
+              (recur)
+              (throw (ex-info (str "JavaScript Turso sync E2E timed out after " timeout-ms " ms")
+                              {:timeout-ms timeout-ms}))))))
+      (let [exit (.exitValue process)]
+        (when-not (zero? exit)
+          (throw (ex-info "JavaScript Turso sync E2E failed" {:exit exit}))))
+      (vreset! succeeded? true)
+      nil
+      (finally
+        (when-not @succeeded?
+          (with-open [stream (.descendants process)]
+            (vswap! descendants into (iterator-seq (.iterator stream))))
+          (stop-client! (concat @descendants [(.toHandle process)])))))))
+
 (defn- run-client! [url]
   (let [process (-> (ProcessBuilder. ["npm" "run" "e2e" "--" url])
                     (.inheritIO)
-                    (.start))
-        exit    (.waitFor process)]
-    (when-not (zero? exit)
-      (throw (ex-info "JavaScript Turso sync E2E failed" {:exit exit})))))
+                    (.start))]
+    (wait-client! process 120000)))
 
 (defn -main []
   (let [system (test/run {:config   (config)
