@@ -140,14 +140,14 @@
                                   29)
            StandardCharsets/US_ASCII))
 
-(defn- callback-failure [context throwable]
+(defn- callback-failure [context ex]
   (let [data (merge {::anomaly/category ::anomaly/fault}
-                    (when (instance? clojure.lang.ExceptionInfo throwable)
-                      (ex-data throwable)))]
+                    (when (instance? clojure.lang.ExceptionInfo ex)
+                      (ex-data ex)))]
     (assoc data
            :operation (:operation context)
            :file-key (:file-key context)
-           :cause throwable)))
+           :cause ex)))
 
 (defn- ptr-at [^MemorySegment segment offset]
   (mem/read-address (mem/slice segment offset pointer-size)))
@@ -155,10 +155,10 @@
 (defn- set-ptr! [^MemorySegment segment offset pointer-value]
   (mem/write-address (mem/slice segment offset pointer-size) pointer-value))
 
-(defn- record-callback-failure! [resources invocation context throwable]
-  (let [failure (if (instance? VirtualMachineError throwable)
-                  throwable
-                  (callback-failure context throwable))
+(defn- record-callback-failure! [resources invocation context ex]
+  (let [failure (if (instance? VirtualMachineError ex)
+                  ex
+                  (callback-failure context ex))
         target  (or (:failure invocation) (:state resources))]
     (swap! target
            (fn [state]

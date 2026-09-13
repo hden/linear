@@ -137,10 +137,10 @@
   (doseq [namespace (map :namespace entries)]
     (try
       (require namespace)
-      (catch Throwable error
+      (catch Exception ex
         (throw (ex-info (str "Failed loading namespace " namespace)
                         {:namespace namespace}
-                        error))))))
+                        ex))))))
 
 (defn -main [& _]
   (let [entries        (discover ["src"])

@@ -75,7 +75,7 @@
   (loop [current error]
     (if-let [message (:sqlite-message (ex-data current))]
       message
-      (if-let [cause (.getCause ^Throwable current)]
+      (if-let [cause (.getCause ^Exception current)]
         (recur cause)
         (.getMessage ^Exception error)))))
 
@@ -84,10 +84,10 @@
     (if-let [data (ex-data current)]
       (if (contains? data :statement-index)
         data
-        (if-let [cause (.getCause ^Throwable current)]
+        (if-let [cause (.getCause ^Exception current)]
           (recur cause)
           data))
-      (if-let [cause (.getCause ^Throwable current)]
+      (if-let [cause (.getCause ^Exception current)]
         (recur cause)
         {}))))
 
