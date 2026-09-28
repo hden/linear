@@ -33,7 +33,10 @@
           (fn [id]
             (try
               (jdbc/with-transaction [tx datasource {:read-only true}]
-                (database/resolve-by-id tx {:master-key master-key :database-id id}))
+                (database/resolve-by-id tx {:master-key master-key
+                                            :actor "actor-1"
+                                            :permission :pull
+                                            :database-id id}))
               nil
               (catch clojure.lang.ExceptionInfo error error)))]
       (tombstone-database! {:datasource datasource
@@ -53,7 +56,10 @@
           (postgres-data/create-database! {:datasource datasource
                                            :master-key master-key})
           resolved (jdbc/with-transaction [tx datasource {:read-only true}]
-                     (database/resolve-by-id tx {:master-key master-key :database-id database-id}))]
+                     (database/resolve-by-id tx {:master-key master-key
+                                                 :actor "actor-1"
+                                                 :permission :pull
+                                                 :database-id database-id}))]
       (is (= database-id (:id resolved)))
       (is (= vault-id (get-in resolved [:vault :id])))
       (is (keychain/keychain? (get-in resolved [:vault :keychain]))))))
@@ -73,7 +79,10 @@
                  :vault-id vault-id}]]]
         (let [error (try
                       (jdbc/with-transaction [tx datasource {:read-only true}]
-                        (database/resolve-by-id tx {:master-key configured :database-id database-id}))
+                        (database/resolve-by-id tx {:master-key configured
+                                                    :actor "actor-1"
+                                                    :permission :pull
+                                                    :database-id database-id}))
                       nil
                       (catch Exception error error))
               data (some #(when (:reason (ex-data %)) (ex-data %))

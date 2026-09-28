@@ -22,15 +22,16 @@
     data))
 
 (defn- error-response [error]
-  {:status (if (#{::anomaly/incorrect ::anomaly/not-found}
-                (::anomaly/category (ex-data error)))
-             400
+  {:status (case (::anomaly/category (ex-data error))
+             ::anomaly/incorrect 400
+             ::anomaly/not-found 400
+             ::anomaly/forbidden 403
              500)
    :headers {"content-type" "application/octet-stream"}
    :body (.getBytes ^String (.getMessage ^Exception error) "UTF-8")})
 
 (defn handler [context]
-  (fn [{:keys [body path-params]}]
+  (fn [{:keys [body identity path-params]}]
     (try
       ;; TODO(turso-sync): client-pages and server-query-selector are sent by
       ;; the official client for partial-sync query strategy. The official
@@ -40,6 +41,7 @@
                                             :client-revision (not-empty (:client-revision pull))
                                             :page-ids (protobuf/decode-page-selector
                                                         (:server-pages-selector pull))
+                                            :actor (:sub identity)
                                             :database-id (:id path-params)})]
         {:status 200
          :headers {"content-type" "application/octet-stream"}

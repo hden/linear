@@ -16,7 +16,6 @@
    [:display-name :string]
    [:vault [:map
             [:id :string]
-            [:owner [:maybe :string]]
             [:created inst?]
             [:keychain ::keychain/keychain]]]])
 

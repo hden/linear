@@ -7,6 +7,7 @@
    [linear.usecase.core :as core]
    [linear.usecase.database.model :as model]
    [linear.usecase.database.revisions :as revisions]
+   [linear.usecase.grant :as grant]
    [linear.usecase.transaction :as transaction]
    [linear.usecase.vault :as vault]
    [urania.core :as u]))
@@ -17,36 +18,37 @@
 (defmethod spec-for ::database [_]
   ::model/database)
 
-(defn resolve-by-id [tx {:keys [master-key database-id]}]
-  (or (u/run!!
-        (u/mapcat
-          (fn [{:keys [vault-id] :as database}]
-            (if database
-              (u/mapcat
-                (fn [resolved-vault]
-                  (lab/traverse
-                    (-> database
-                        (assoc :vault resolved-vault)
-                        (dissoc :vault-id))))
-                (vault/retriever vault-id))
-              (u/value nil)))
-          (lab/fetch ::database database-id))
-        {:env {:tx tx
-               :linear.usecase.core/master-key master-key}})
+(defn resolve-by-id [tx {:keys [actor database-id master-key permission]}]
+  (let [env      {:tx tx
+                  :linear.usecase.core/master-key master-key}
+        database (u/run!! (lab/fetch ::database database-id) {:env env})]
+    (if-let [vault-id (:vault-id database)]
+      (do
+        (grant/require-permission tx {:actor actor
+                                      :vault-id vault-id
+                                      :permission permission})
+        (-> database
+            (assoc :vault (u/run!! (vault/retriever vault-id) {:env env}))
+            (dissoc :vault-id)))
       (throw (ex-info "Database was not found"
                       {::anomaly/category ::anomaly/not-found
                        :reason ::database-not-found
-                       :database-id database-id}))))
+                       :database-id database-id})))))
 
 (defmacro with-database
   [[binding context params] & body]
   `(let [context# ~context
          params# ~params
          database-id# (:database-id params#)
+         actor# (:actor params#)
+         permission# (:permission params#)
          read-only# (get params# :read-only false)]
      (transaction/with-transaction
        [tx# (core/transactable context#) {:read-only read-only#}]
-       (let [resolved-database# (resolve-by-id tx# {:master-key (core/master-key context#) :database-id database-id#})]
+       (let [resolved-database# (resolve-by-id tx# {:actor actor#
+                                                    :database-id database-id#
+                                                    :master-key (core/master-key context#)
+                                                    :permission permission#})]
          (revisions/with-consistent-view
            [view# (core/consistent-readable context#) resolved-database#]
            (let [~binding (model/database
@@ -67,11 +69,13 @@
    :jitter-factor 0.5})
 
 (defn push!
-  [context {:keys [database-id command]}]
+  [context {:keys [actor database-id command]}]
   (try
     (diehard/with-retry revision-conflict-retry-policy
       (let [[database revision]
             (with-database [database context {:database-id database-id
+                                              :actor actor
+                                              :permission :push
                                               :read-only true}]
               [database (model/evaluate database command)])]
         (model/publish-next! database revision)))
@@ -85,7 +89,25 @@
         (throw error)))))
 
 (defn pull
-  [context {:keys [database-id] :as pull-options}]
+  [context {:keys [actor database-id] :as pull-options}]
   (with-database [database context {:database-id database-id
+                                    :actor actor
+                                    :permission :pull
                                     :read-only true}]
     (model/pull database pull-options)))
+
+(defn check-permission
+  [context {:keys [actor database-id permission]}]
+  (transaction/with-transaction [tx (core/transactable context) {:read-only true}]
+    (let [database (u/run!! (lab/fetch ::database database-id) {:env {:tx tx}})]
+      (if-let [vault-id (:vault-id database)]
+        (grant/require-permission tx {:actor actor
+                                      :vault-id vault-id
+                                      :permission permission})
+        (throw (ex-info "Database permission denied"
+                        {::anomaly/category ::anomaly/forbidden
+                         :reason ::grant/permission-denied
+                         :actor actor
+                         :database-id database-id
+                         :permission permission}))))
+    true))

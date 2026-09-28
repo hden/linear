@@ -16,6 +16,7 @@
 (deftest pull-handler-translates-backend-anomalies
   (doseq [[category status] [[:cognitect.anomalies/incorrect 400]
                              [:cognitect.anomalies/not-found 400]
+                             [:cognitect.anomalies/forbidden 403]
                              [:cognitect.anomalies/unavailable 500]
                              [:cognitect.anomalies/fault 500]]]
     (let [database (reify transaction/Transactable
@@ -23,7 +24,9 @@
                        (throw (ex-info "backend failed"
                                        {:cognitect.anomalies/category category}))))
           response ((pull/handler {::core/database database})
-                    {:body (byte-array 0) :path-params {:id "d-test"}})]
+                    {:body (byte-array 0)
+                     :identity {:sub "auth0|pull-handler"}
+                     :path-params {:id "d-test"}})]
       (is (= status (:status response))))))
 
 (def ^:private body-limit (* 16 1024 1024))

@@ -220,7 +220,9 @@
         (parse-command {:body-size (request-content-length request)
                         :batch batch})]
     (try
-      (database/push! context {:database-id (:id (:path-params request)) :command command})
+      (database/push! context {:actor (get-in request [:identity :sub])
+                               :database-id (:id (:path-params request))
+                               :command command})
       (hrana/batch-response (count (:steps batch)))
       (catch Exception error
         (if (hrana/statement-error? error)
@@ -232,7 +234,12 @@
     (try
       (let [batch (hrana/single-batch body-params)]
         (if (hrana/last-change-id-query? batch)
-          (hrana/last-change-id-response)
+          (do
+            (database/check-permission context
+                                       {:actor (get-in request [:identity :sub])
+                                        :database-id (get-in request [:path-params :id])
+                                        :permission :pull})
+            (hrana/last-change-id-response))
           (handle-batch context request batch)))
       (catch Exception error
         (hrana/error-response error)))))

@@ -7,7 +7,7 @@
    [linear.adapter.postgres]
    [linear.adapter.slatedb.store]
    [linear.adapter.sqlite.evaluator]
-   [linear.test :refer [run]]
+   [linear.test :refer [catch-ex-data run]]
    [linear.test-data.postgres :as postgres-data]
    [linear.test-data.slatedb :as slatedb-data]
    [linear.test-data.sqlite :as sqlite-data]
@@ -16,6 +16,7 @@
    [linear.usecase.database.evaluator :as evaluator]
    [linear.usecase.database.model :as model]
    [linear.usecase.database.revisions :as revisions]
+   [linear.usecase.grant :as grant]
    [linear.usecase.transaction :as transaction]
    [next.jdbc :as jdbc]
    [taoensso.tempel :as tempel]))
@@ -42,6 +43,71 @@
    ::core/revision-store store
    ::core/evaluator evaluator})
 
+(deftest ^:integration permissions-gate-database-and-grant-operations
+  (with-system [system (run {:keys [:duct.database/sql
+                                    :duct.migrator/ragtime]})]
+    (let [datasource (:duct.database.sql/hikaricp system)
+          {:keys [database-id vault-id master-key]}
+          (postgres-data/create-database! {:datasource datasource})
+          events    (atom [])
+          store     (reify
+                      revisions/ConsistentReadable
+                      (-read-consistently [_ f _]
+                        (swap! events conj :view)
+                        (f (view events "r-current")))
+                      revisions/RevisionWritable
+                      (-publish-next! [_ revision _]
+                        (swap! events conj :publish)
+                        revision))
+          evaluator (reify evaluator/Evaluator
+                      (-evaluate [_ _]
+                        (swap! events conj :evaluate)
+                        {:revision-id "r-next"
+                         :parent "r-current"
+                         :database-page-count 1
+                         :pages {}}))
+          context   (application-context datasource master-key store evaluator)]
+      (grant/set-grant! context {:actor "actor-1"
+                                 :vault-id vault-id
+                                 :subject "pull-actor"
+                                 :permission :pull})
+      (grant/set-grant! context {:actor "actor-1"
+                                 :vault-id vault-id
+                                 :subject "push-actor"
+                                 :permission :push})
+
+      (is (= "r-current"
+             (:server-revision (database/pull context {:actor "pull-actor"
+                                                       :database-id database-id}))))
+      (is (= "r-current"
+             (:server-revision (database/pull context {:actor "push-actor"
+                                                       :database-id database-id}))))
+      (is (= [:view :head :view :head] @events))
+
+      (reset! events [])
+      (let [denied-push (catch-ex-data
+                          #(database/push! (assoc context ::core/master-key nil)
+                                           {:actor "pull-actor"
+                                            :database-id database-id
+                                            :command {:statements []}}))]
+        (is (= ::anomaly/forbidden (::anomaly/category denied-push)))
+        (is (= ::grant/permission-denied (:reason denied-push)))
+        (is (empty? @events)))
+      (is (= ::anomaly/forbidden
+             (::anomaly/category
+               (catch-ex-data #(grant/list-grants context {:actor "pull-actor"
+                                                           :vault-id vault-id})))))
+      (is (= ::anomaly/forbidden
+             (::anomaly/category
+               (catch-ex-data #(grant/list-grants context {:actor "push-actor"
+                                                           :vault-id vault-id})))))
+
+      (is (= "r-next"
+             (:revision-id (database/push! context {:actor "push-actor"
+                                                    :database-id database-id
+                                                    :command {:statements []}}))))
+      (is (= [:view :head :evaluate :publish] @events)))))
+
 (deftest ^:integration pushes-through-domain-sqlite-and-slatedb-boundaries
   (with-system [system (run {:keys [:duct.database/sql
                                     :duct.migrator/ragtime
@@ -61,11 +127,11 @@
                                  :keychain keychain
                                  :pages (sqlite-data/pages {:image (sqlite-data/sqlite-image)})})
       (let [first-revision
-            (database/push! context {:database-id database-id
+            (database/push! context {:actor "actor-1" :database-id database-id
                                      :command {:statements [{:sql "UPDATE t SET value = ? WHERE id = 1"
                                                              :parameters ["first"]}]}})
             second-revision
-            (database/push! context {:database-id database-id
+            (database/push! context {:actor "actor-1" :database-id database-id
                                      :command {:statements
                                                [{:sql (str "SELECT CASE WHEN value = ? THEN 1 "
                                                            "ELSE abs(-9223372036854775808) END FROM t WHERE id = 1")
@@ -141,7 +207,9 @@
                                        :vault-id vault-id
                                        :transaction-id tx-id
                                        :attributes-id attributes-id})
-      (let [revision (database/push! context {:database-id database-id :command command})]
+      (let [revision (database/push! context {:actor "actor-1"
+                                              :database-id database-id
+                                              :command command})]
         (is (= "r-next" (:revision-id revision)))
         (let [[[_ database-at-read]
                _
@@ -160,7 +228,6 @@
           (is (= {:id database-id
                   :display-name "Primary"
                   :vault {:id vault-id
-                          :owner "owner-1"
                           :created (get-in database-at-read [:vault :created])
                           :keychain keychain}}
                  (select-keys database-at-read [:id :display-name :vault])))
@@ -208,7 +275,7 @@
           result       (database/push! (application-context datasource
                                          master-key
                                          store
-                                         evaluator) {:database-id database-id :command {:statements []}})]
+                                         evaluator) {:actor "actor-1" :database-id database-id :command {:statements []}})]
       (is (= "r-second-next" (:revision-id result)))
       (is (= ["r-first" "r-second"] @evaluated))
       (is (= ["Primary" "Renamed"] @resolved-names))
@@ -239,7 +306,7 @@
                        (database/push! (application-context datasource
                                          master-key
                                          store
-                                         evaluator) {:database-id database-id :command {:statements []}})
+                                         evaluator) {:actor "actor-1" :database-id database-id :command {:statements []}})
                        nil
                        (catch clojure.lang.ExceptionInfo failure
                          failure))]
@@ -270,7 +337,7 @@
                       (database/push! (application-context datasource
                                         master-key
                                         store
-                                        evaluator) {:database-id database-id :command {:statements []}})
+                                        evaluator) {:actor "actor-1" :database-id database-id :command {:statements []}})
                       nil
                       (catch clojure.lang.ExceptionInfo caught
                         caught))]
@@ -304,7 +371,7 @@
                       (database/push! (application-context datasource
                                         master-key
                                         store
-                                        evaluator) {:database-id database-id :command {:statements []}})
+                                        evaluator) {:actor "actor-1" :database-id database-id :command {:statements []}})
                       nil
                       (catch clojure.lang.ExceptionInfo caught
                         caught))]

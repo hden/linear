@@ -31,7 +31,6 @@
            (::anomaly/category (ex-data error))))
     (is (= ::core/transaction-idempotency-conflict
            (:reason (ex-data error))))
-    (is (core/transaction-idempotency-conflict? error))
     (is (caused-by? PSQLException error))))
 
 (deftest classifies-postgres-errors
@@ -64,13 +63,6 @@
   (let [error (ex-info "already translated"
                        {::anomaly/category ::anomaly/unavailable})]
     (is (identical? error (translate :query error)))))
-
-(deftest rollback
-  (let [calls (atom 0)
-        tx    (proxy [java.sql.Connection] []
-                (rollback [] (swap! calls inc)))]
-    (core/rollback tx)
-    (is (= 1 @calls))))
 
 (deftest ^:integration query
   (with-system [sys (run {:keys [:duct.database/sql

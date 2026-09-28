@@ -8,45 +8,42 @@
 
 (extend-protocol vault/Database
   Connection
-  (-create! [tx {:keys [data idempotency-key]}]
+  (-create! [tx {:keys [actor data idempotency-key]}]
     (let [txid (core/transaction-id)
           vaults (into []
-                       (map (fn [{:keys [id owner ciphertext encrypted-by]}]
-                              [id owner txid ciphertext encrypted-by]))
+                       (map (fn [{:keys [id ciphertext encrypted-by]}]
+                              [id txid ciphertext encrypted-by]))
                        data)]
-      (try
+      (if (seq (core/query tx {:statement {:insert-into :transactions
+                                           :columns     [:id :actor :idempotency-key]
+                                           :values      [[txid actor idempotency-key]]
+                                           :on-conflict [:actor :idempotency-key]
+                                           :do-nothing  true
+                                           :returning   [:id]}}))
         (let [result (core/transact!
                        tx
-                       {:statements [{:statement {:insert-into :transactions
-                                                  :columns     [:id :idempotency-key]
-                                                  :values      [[txid idempotency-key]]}
-                                      :parse-fn  (constantly [])}
-                                     {:statement {:insert-into :vaults
-                                                  :columns     [:id :owner :created-by :ciphertext :encrypted-by]
+                       {:statements [{:statement {:insert-into :vaults
+                                                  :columns     [:id :created-by :ciphertext :encrypted-by]
                                                   :values      vaults
                                                   :returning   [:id]}
                                       :parse-fn  #(map (juxt :id identity) %)}]})]
-          (into (sorted-set) (keys result)))
-        (catch Exception ex
-          (if (core/transaction-idempotency-conflict? ex)
-            (do
-              (core/rollback tx)
-              (let [rows (core/query tx {:statement {:select     [:v.id]
-                                                     :from       [[:vaults :v]]
-                                                     :inner-join [[:transactions :t]
-                                                                  [:= :v.created-by :t.id]]
-                                                     :where      [:= :t.idempotency-key idempotency-key]
-                                                     :order-by   [[:v.id :asc]]}})]
-                (if (seq rows)
-                  (into (sorted-set) (keep :id rows))
-                  (throw ex))))
-            (throw ex)))))))
+          {:ids (into (sorted-set) (keys result))
+           :created? true})
+        (let [rows (core/query tx {:statement {:select     [:v.id]
+                                               :from       [[:vaults :v]]
+                                               :inner-join [[:transactions :t]
+                                                            [:= :v.created-by :t.id]]
+                                               :where      [:and
+                                                            [:= :t.actor actor]
+                                                            [:= :t.idempotency-key idempotency-key]]
+                                               :order-by   [[:v.id :asc]]}})]
+          {:ids (into (sorted-set) (keep :id rows))
+           :created? false})))))
 
 (lab/defretriever vault
   {:tag :linear.usecase.vault/vault}
   [{:keys [tx]} ids]
   (core/query tx {:statement {:select   [[:v.id :id]
-                                         [:v.owner :owner]
                                          [:v.created-at :created]
                                          [:v.ciphertext :ciphertext]
                                          [:v.encrypted-by :encrypted-by]]

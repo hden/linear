@@ -12,6 +12,12 @@ import { connect } from "@tursodatabase/sync";
 
 const url = process.argv[2];
 assert(url, "usage: npm run e2e -- <linear-base-url>");
+const managerToken = process.env.LINEAR_E2E_MANAGER_TOKEN;
+const readerToken = process.env.LINEAR_E2E_READER_TOKEN;
+const ungrantedToken = process.env.LINEAR_E2E_UNGRANTED_TOKEN;
+assert(managerToken, "LINEAR_E2E_MANAGER_TOKEN is required");
+assert(readerToken, "LINEAR_E2E_READER_TOKEN is required");
+assert(ungrantedToken, "LINEAR_E2E_UNGRANTED_TOKEN is required");
 
 const root = await mkdtemp(join(tmpdir(), "linear-turso-e2e-"));
 const clients = [];
@@ -24,6 +30,7 @@ const connectClient = async (name, options = {}) => {
     path: join(root, name),
     url,
     clientName: `linear-e2e-${name}`,
+    authToken: managerToken,
     ...options
   });
   clients.push(client);
@@ -50,6 +57,18 @@ try {
   assert.deepEqual(await rows(clientB, "SELECT value FROM t WHERE id = 1"), [
     { value: "from-js" }
   ]);
+
+  const readerClient = await connectClient("reader", { authToken: readerToken });
+  assert.deepEqual(await rows(readerClient, "SELECT value FROM t WHERE id = 1"), [
+    { value: "from-js" }
+  ]);
+  await readerClient.exec("UPDATE t SET value = 'reader-local' WHERE id = 1");
+  await assert.rejects(() => readerClient.push(), /403/);
+
+  await assert.rejects(
+    () => connectClient("ungranted", { authToken: ungrantedToken }),
+    /403/
+  );
 
   // Official sync test: select-without-push. Local writes stay local until
   // the client explicitly pushes them.

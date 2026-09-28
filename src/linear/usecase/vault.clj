@@ -4,6 +4,7 @@
    [hden.ulid :refer [ulid]]
    [labrador.core :as lab]
    [linear.usecase.core :as core]
+   [linear.usecase.grant :as grant]
    [linear.usecase.keychain :as keychain]
    [linear.usecase.transaction :as transaction]
    [urania.core :as u]))
@@ -50,9 +51,10 @@
                   :map
                   [:map
                    [:data [:sequential [:map]]]
-                   [:idempotency-key :string]]
-                  [:map-of :string :map]]}
-  [context {:keys [data idempotency-key]}]
+                   [:idempotency-key :string]
+                   [:actor :string]]
+                  [:vector :string]]}
+  [context {:keys [actor data idempotency-key]}]
   (let [master-key (core/master-key context)
         vaults     (mapv (fn [attributes]
                            (let [id       (vault-id)
@@ -64,18 +66,29 @@
                                     :encrypted-by (keychain/id master-key))))
                          data)]
     (transaction/with-transaction [tx (core/transactable context)]
-      ;; TODO: verify ownership
-      (let [ids (-create! tx {:data vaults :idempotency-key idempotency-key})]
-        ;; read your writes
-        (fetch master-key tx ids)))))
+      (let [{:keys [ids created?]} (-create! tx {:actor actor
+                                                 :data vaults
+                                                 :idempotency-key idempotency-key})
+            ids (vec ids)]
+        (when created?
+          (grant/-set-grants! tx {:data (mapv (fn [vault-id]
+                                                {:vault-id vault-id
+                                                 :subject actor
+                                                 :permission :manage})
+                                              ids)}))
+        ids))))
 
 (defn get-by-ids
   {:malli/schema [:->
                   :map
                   [:map
+                   [:actor :string]
                    [:ids [:sequential :string]]]
                   [:map-of :string :map]]}
-  [context {:keys [ids]}]
+  [context {:keys [actor ids]}]
   (transaction/with-transaction [tx (core/transactable context) {:read-only true}]
-    ;; TODO: verify ownership
+    (doseq [id ids]
+      (grant/require-permission tx {:actor actor
+                                    :vault-id id
+                                    :permission :pull}))
     (fetch (core/master-key context) tx ids)))

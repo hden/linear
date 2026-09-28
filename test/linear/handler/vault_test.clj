@@ -16,10 +16,13 @@
    ::core/keychain   crypto/new-keychain
    ::core/master-key (crypto/keychain "dev-ephemeral" (tempel/keychain))})
 
+(defn- actor-request [request]
+  (assoc request :identity {:sub "auth0|vault-handler"}))
+
 (deftest create-handler-rejects-a-missing-idempotency-header
   (is (= 400
          (:status ((handler/create {})
-                   (request :post "/control/v1/vaults"))))))
+                   (actor-request (request :post "/control/v1/vaults")))))))
 
 (deftest ^:integration create-handler-translates-backend-failure-to-500
   (let [database (reify transaction/Transactable
@@ -27,8 +30,9 @@
                      (throw (ex-info "distinctive backend failure"
                                      {:cognitect.anomalies/category :cognitect.anomalies/fault}))))
         response ((handler/create (vault-context {:database database}))
-                  (header (request :post "/control/v1/vaults")
-                          "idempotency-key" "backend-failure"))]
+                  (actor-request
+                    (header (request :post "/control/v1/vaults")
+                            "idempotency-key" "backend-failure")))]
     (is (= 500 (:status response)))
     (is (= {:error "distinctive backend failure"} (:body response)))))
 
@@ -36,8 +40,9 @@
   (with-system [system (run {:keys [:duct.database/sql :duct.migrator/ragtime]})]
     (let [context  (vault-context {:database (:duct.database.sql/hikaricp system)})
           create   (handler/create context)
-          request  (header (request :post "/control/v1/vaults")
-                           "idempotency-key" (str "vault-handler-" (random-uuid)))
+          request  (actor-request
+                     (header (request :post "/control/v1/vaults")
+                             "idempotency-key" (str "vault-handler-" (random-uuid))))
           created  (create request)]
       (is (= 201 (:status created)))
       (is (string? (get-in created [:body :id]))))))

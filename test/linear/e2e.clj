@@ -8,6 +8,7 @@
    [linear.adapter.slatedb.ffi :as ffi]
    [linear.adapter.slatedb.key :as key]
    [linear.test :as test]
+   [linear.test-data.jwt :as jwt]
    [linear.test-data.sqlite :as sqlite-data]
    [linear.usecase.keychain :as keychain]
    [next.jdbc :as jdbc]
@@ -26,14 +27,17 @@
   (-> (read-config (io/file "duct.edn"))
       (assoc-in [:vars 'port] {:type :int :default 3000})))
 
-(defn- seed-postgres! [datasource master-key {database-id :id :keys [vault]}]
+(defn- seed-postgres!
+  [datasource master-key {database-id :id :keys [manager reader vault]}]
   (let [vault-id (:id vault)
         transaction-id (str "tx-" (random-uuid))
         attributes-id (str "a-" (random-uuid))
         ciphertext (keychain/encrypt master-key {:associated-data (.getBytes ^String vault-id "UTF-8")
                                                  :value (:keychain vault)})]
     (jdbc/with-transaction [tx datasource]
-      (jdbc/execute! tx ["INSERT INTO transactions (id) VALUES (?)" transaction-id])
+      (jdbc/execute! tx
+                     ["INSERT INTO transactions (id, actor) VALUES (?, ?)"
+                      transaction-id manager])
       (jdbc/execute! tx
                      ["INSERT INTO vaults (id, ciphertext, encrypted_by, created_by) VALUES (?, ?, ?, ?)"
                       vault-id ciphertext "dev-ephemeral" transaction-id])
@@ -42,7 +46,10 @@
                       database-id vault-id attributes-id])
       (jdbc/execute! tx
                      ["INSERT INTO database_attributes (id, database_id, display_name, created_by) VALUES (?, ?, ?, ?)"
-                      attributes-id database-id "E2E" transaction-id]))))
+                      attributes-id database-id "E2E" transaction-id])
+      (jdbc/execute! tx
+                     ["INSERT INTO vault_grants (vault_id, subject, permission) VALUES (?, ?, ?), (?, ?, ?)"
+                      vault-id manager "manage" vault-id reader "pull"]))))
 
 (defn- root-records [keychain pages]
   (let [revision     {:revision-id         "r-root"
@@ -116,30 +123,42 @@
             (vswap! descendants into (iterator-seq (.iterator stream))))
           (stop-client! (concat @descendants [(.toHandle process)])))))))
 
-(defn- run-client! [url]
-  (let [process (-> (ProcessBuilder. ["npm" "run" "e2e" "--" url])
-                    (.inheritIO)
-                    (.start))]
-    (wait-client! process 120000)))
+(defn- run-client! [url tokens]
+  (let [builder     (ProcessBuilder. ["npm" "run" "e2e" "--" url])
+        environment (.environment builder)]
+    (doseq [[name token] tokens]
+      (.put environment name token))
+    (let [process (-> builder
+                      (.inheritIO)
+                      (.start))]
+      (wait-client! process 120000))))
 
 (defn -main []
-  (let [system (test/run {:config   (config)
-                          :keys     #{:duct.server.http/jetty}
-                          :profiles [:test :main]
-                          :vars     {'port 0}})]
-    (try
-      (let [master-key (:linear.adapter.crypto.tempel/master-key system)
-            keychain   (crypto/keychain (tempel/keychain))
-            database   {:id (str "d-e2e-" (random-uuid))
-                        :display-name "E2E"
-                        :vault {:id (str "v-e2e-" (random-uuid))
-                                :owner nil
-                                :created java.time.Instant/EPOCH
-                                :keychain keychain}}]
-        (seed-postgres! (:duct.database.sql/hikaricp system) master-key database)
-        (seed! (:linear.adapter.slatedb.store/store system)
-               database
-               (sqlite-data/pages {:image (sqlite-data/sqlite-image)}))
-        (run-client! (server-url system (:id database))))
-      (finally
-        (integrant/halt! system)))))
+  (with-open [fixture (jwt/fixture)]
+    (let [manager (str "auth0|e2e-manager-" (random-uuid))
+          reader (str "auth0|e2e-reader-" (random-uuid))
+          ungranted (str "auth0|e2e-ungranted-" (random-uuid))
+          system (test/run {:config   (config)
+                            :keys     #{:duct.server.http/jetty}
+                            :profiles [:test :main]
+                            :vars     (assoc (jwt/oidc-vars fixture) 'port 0)})]
+      (try
+        (let [master-key (:linear.adapter.crypto.tempel/master-key system)
+              keychain   (crypto/keychain (tempel/keychain))
+              database   {:id (str "d-e2e-" (random-uuid))
+                          :display-name "E2E"
+                          :manager manager
+                          :reader reader
+                          :vault {:id (str "v-e2e-" (random-uuid))
+                                  :created java.time.Instant/EPOCH
+                                  :keychain keychain}}]
+          (seed-postgres! (:duct.database.sql/hikaricp system) master-key database)
+          (seed! (:linear.adapter.slatedb.store/store system)
+                 database
+                 (sqlite-data/pages {:image (sqlite-data/sqlite-image)}))
+          (run-client! (server-url system (:id database))
+                       {"LINEAR_E2E_MANAGER_TOKEN" (jwt/access-token fixture {:subject manager})
+                        "LINEAR_E2E_READER_TOKEN" (jwt/access-token fixture {:subject reader})
+                        "LINEAR_E2E_UNGRANTED_TOKEN" (jwt/access-token fixture {:subject ungranted})}))
+        (finally
+          (integrant/halt! system))))))

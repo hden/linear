@@ -17,7 +17,6 @@
   {:id "d-1"
    :display-name "Primary"
    :vault {:id "v-1"
-           :owner "owner-1"
            :created #inst "2026-01-01"
            :keychain keychain}})
 

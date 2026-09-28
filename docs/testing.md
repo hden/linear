@@ -11,8 +11,15 @@ sources but does not install the Kaocha Malli instrumentation hook. Use `bb
 test` to validate instrumented contracts and `bb coverage` to inspect execution
 coverage; neither command replaces the other.
 
-`bb e2e` exercises the real Turso client over HTTP and provides transport
-assurance that source-level coverage does not measure.
+`bb e2e` exercises the real Turso client over authenticated HTTP and provides
+transport assurance that source-level coverage does not measure. It starts a
+local RSA/JWKS fixture, configures the application with that issuer and
+audience, and passes short-lived signed tokens to the JavaScript subprocess via
+environment variables. The SDK supplies those tokens through its `authToken`
+option. The scenario preserves the ordinary bootstrap, pull, push, concurrent
+merge, constraint, and chunked-pull checks, and also verifies that a pull-only
+actor can bootstrap but cannot push and an ungranted actor cannot bootstrap.
+No external identity provider is required for this test.
 
 Tests live beside the boundary they exercise. Handler tests assert transport
 wire behavior, adapter tests exercise native and storage boundaries, and

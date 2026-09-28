@@ -28,9 +28,6 @@
 (defmethod spec-for ::connection [_]
   [:fn connection?])
 
-(defn rollback [^Connection tx]
-  (.rollback tx))
-
 (def ^:const ^:private unique-violation "23505")
 (def ^:const ^:private transaction-rollback "40")
 (def ^:const ^:private lock-not-available "55P03")
@@ -94,11 +91,6 @@
 
     :else
     ::anomaly/fault))
-
-(defn transaction-idempotency-conflict? [error]
-  (let [data (ex-data error)]
-    (and (= ::anomaly/conflict (::anomaly/category data))
-         (= ::transaction-idempotency-conflict (:reason data)))))
 
 (defn- anomaly-message [category]
   (case category

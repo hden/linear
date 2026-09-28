@@ -10,11 +10,10 @@
           )"
 
          "CREATE UNIQUE INDEX transactions_idempotency
-            ON transactions (idempotency_key) WHERE idempotency_key IS NOT NULL"
+            ON transactions (actor, idempotency_key)"
 
          "CREATE TABLE vaults
           ( id               text        PRIMARY KEY
-          , owner            text
           , ciphertext       bytea
           , encrypted_by     text
           , metadata         jsonb
@@ -24,7 +23,16 @@
               CHECK ((ciphertext IS NULL) = (encrypted_by IS NULL))
           , CONSTRAINT vaults_id_prefix CHECK (id LIKE 'v-%')
           )"
-         "CREATE INDEX vaults_by_owner ON vaults (owner)"
+
+         "CREATE TABLE vault_grants
+          ( vault_id  text NOT NULL REFERENCES vaults (id)
+          , subject   text NOT NULL
+          , permission text NOT NULL
+          , PRIMARY KEY (vault_id, subject)
+          , CONSTRAINT vault_grants_permission
+              CHECK (permission IN ('pull', 'push', 'manage'))
+          )"
+         "CREATE INDEX vault_grants_by_subject ON vault_grants (subject, vault_id)"
 
          "CREATE TABLE databases
           ( id                     text        PRIMARY KEY
@@ -71,14 +79,13 @@
          "COMMENT ON COLUMN transactions.actor IS 'Who asked — a person or a service account, and toro does not ask which. Recorded so that why this row exists can be traced, and never consulted to decide whether a request may proceed.'"
          "COMMENT ON COLUMN transactions.xid IS 'Which PostgreSQL transaction wrote this row, for checking against the server log. A debugging aid: never unique and never a key, because the counter behind it wraps around.'"
          "COMMENT ON COLUMN transactions.metadata IS 'Small facts worth keeping for debugging. Never the request body: the idempotency key already tells whether an operation ran, and a body would put personal data in a table that outlives the operation.'"
-         "COMMENT ON COLUMN vaults.owner IS 'Who this vault belongs to, as an opaque external label: searched by and audited with, never interpreted and never unique. Several live vaults under one owner are legitimate, which is what gives an application shredding granularity finer than a whole customer without toro knowing why (ADR-0006).'"
-         "COMMENT ON COLUMN vaults.ciphertext IS 'The data encryption key of this vault, encrypted. The plaintext exists only in memory, while it is in use. Empty once the owner was handed their key and this copy was deleted, which is the one destruction in this schema — the row itself stays, so what it says about a vault that was given up is that its layers are unreadable rather than that it never existed.'"
+         "COMMENT ON COLUMN vaults.ciphertext IS 'The data encryption key of this vault, encrypted. The plaintext exists only in memory, while it is in use. Empty once the key was handed out and this copy was deleted, which is the one destruction in this schema — the row itself stays, so what it says about a vault that was given up is that its layers are unreadable rather than that it never existed.'"
          "COMMENT ON COLUMN vaults.encrypted_by IS 'Which keychain encrypted the key in this row. Destroying that keychain makes every database of this vault permanently unreadable, which is what offboarding does. Unlike every other reference here it names something outside the database: it cannot be joined, and toro does not mint it. A deployment has to be able to tell which of these rows it can open at all rather than discovering it from a decryption failure, so this is compared before anything is decrypted — and it is a configured name rather than anything derived from the key, because a key service key keeps its name across rotations (ADR-0005).'"
          "COMMENT ON COLUMN database_attributes.metadata IS 'Notes about the database for the people who operate it.'"
          "COMMENT ON COLUMN database_tombstones.metadata IS 'Why it was closed, when that is worth keeping.'"
          "COMMENT ON TABLE vaults IS 'A key toro holds, encrypted by another, and the unit management and transfer are done in (ADR-0006). Every row is one data encryption key, and nothing else is stored here: the deployment''s own keychain is a configured name rather than a row (see encrypted_by). Named for what a row is rather than for the role it plays, because which key encrypts data and which encrypts a key is decided by what was encrypted rather than by the key itself (ADR-0005).'"
          "COMMENT ON TABLE databases IS 'The atom: one row per database. Its attributes may move independently from page revisions, which are owned by the revision store. A client addresses this (/d/{id}).'"
-         "COMMENT ON COLUMN databases.encrypted_by IS 'Which vault the pages this database publishes are encrypted by, and therefore the only place its owner is recorded (ADR-0005). The same relation as `vaults.encrypted_by`, one level down: a database''s pages are encrypted by its vault, and that vault''s own bytes are encrypted by the deployment''s keychain. One word for one relation at both levels; the only difference is where the key lives, a row here against a name outside. Never empty: a keychain is required to publish a layer, and a database whose pages are unencrypted is a state this design deliberately does not represent, because no migration onto encryption is designed (ADR-0005).'"
+         "COMMENT ON COLUMN databases.encrypted_by IS 'Which vault the pages this database publishes are encrypted by (ADR-0005). The same relation as `vaults.encrypted_by`, one level down: a database''s pages are encrypted by its vault, and that vault''s own bytes are encrypted by the deployment''s keychain. One word for one relation at both levels; the only difference is where the key lives, a row here against a name outside. Never empty: a keychain is required to publish a layer, and a database whose pages are unencrypted is a state this design deliberately does not represent, because no migration onto encryption is designed (ADR-0005).'"
          "COMMENT ON COLUMN databases.current_attributes IS 'The labelling this database is at. No client can observe it, and it never contends with a push.'"
          "COMMENT ON TABLE database_attributes IS 'What people call a database. Apart from revisions on purpose: a rename must not look like new content to a client.'"
          "COMMENT ON TABLE database_tombstones IS 'One row per closed database. The fact is the row itself: this identity ended, at this time, in this transaction.'"]
@@ -86,5 +93,6 @@
          "ALTER TABLE databases DROP CONSTRAINT databases_current_attributes"
          "DROP TABLE database_attributes"
          "DROP TABLE databases"
+         "DROP TABLE vault_grants"
          "DROP TABLE vaults"
          "DROP TABLE transactions"]}]

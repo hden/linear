@@ -38,6 +38,33 @@ depend on use-cases; adapters may depend on use-cases and their own technology.
 All other directions are denied. Exceptional edges require an explicitly
 approved harness change. There is no inline or command-line suppression.
 
+## Authentication and vault authorization
+
+`linear.middleware.authentication` is the outer HTTP authentication boundary.
+It verifies RS256 access tokens against the configured issuer, audience, and
+JWKS provider, then replaces request identity with the verified `sub`. Health
+routes are public; vault and Turso sync routes require authentication. Handlers
+pass the subject inward as `:actor` and do not perform grant policy themselves.
+
+The grant use-case owns the `pull < push < manage` hierarchy, management
+authorization, and transaction boundaries. Its store protocol exposes raw
+batch set and revoke capabilities whose items may span multiple vaults.
+Higher-level operations compose those capabilities: vault creation writes the
+new vaults and creator `manage` grants in one transaction, while the HTTP grant
+routes compose singleton batches inside an authorized transaction. PostgreSQL
+implements the capability and persists one grant per vault and subject.
+Vault creation returns IDs only. A retry by the same actor with the same
+idempotency key returns those original IDs without repeating writes or
+restoring revoked grants; reading vault contents is a separate operation that
+checks the actor's current grant.
+
+Sync permission is checked after resolving the raw database's vault ID and
+before retrieving or decrypting the vault keychain. Pull requires `pull`; push
+requires `push`, and every revision-conflict retry resolves the database and
+checks permission again. Sync metadata also requires `pull`. Authorization does
+not add cross-store locks, so an operation that has already passed its check may
+finish after its grant is revoked.
+
 ## Application context
 
 Duct injects one shared `handler-opts` application context into every handler.
@@ -80,13 +107,13 @@ capabilities belong to use-cases.
 Vault retrieval is composed as:
 
 ```text
-raw vault -> configured master key -> unwrap keychain
+require pull grant -> raw vault -> configured master key -> unwrap keychain
 ```
 
 Database retrieval is composed in one PostgreSQL transaction as:
 
 ```text
-raw database -> composed vault
+raw database -> require grant for its vault ID -> composed vault
 ```
 
 The lifecycle invariant is that a database with `current_attributes` is not
@@ -135,11 +162,13 @@ SlateDB; it does not introduce dual writes or a cross-store transaction.
 ## PostgreSQL loading
 
 `linear.adapter.postgres` is a load-only technology root. It loads
-`datasource`, `database`, and `vault`; it does not implement a capability.
+`datasource`, `database`, `grant`, and `vault`; it does not implement a
+capability.
 Within the subtree:
 
 - `datasource` implements transaction and health-check capabilities.
-- `database` and `vault` implement raw fact retrieval and vault persistence.
+- `database` and `vault` implement raw fact retrieval and vault persistence;
+  `grant` implements grant lookup and batch mutation.
 - `core` implements shared JDBC mechanisms and PostgreSQL error policy.
 
 Peer capability implementations do not depend on one another. The Integrant

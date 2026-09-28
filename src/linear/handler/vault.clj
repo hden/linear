@@ -4,7 +4,7 @@
    [linear.usecase.vault :as vault]))
 
 (defn create [context]
-  (fn [{:keys [headers]}]
+  (fn [{:keys [headers identity]}]
     (try
       (let [idempotency-key (get headers "idempotency-key")]
         (when-not (and (string? idempotency-key)
@@ -12,11 +12,12 @@
           (throw (ex-info "Idempotency-Key header is required"
                           {::anomaly/category ::anomaly/incorrect
                            :reason ::missing-idempotency-key})))
-        (let [created (vault/create! context
-                                     {:data [{:owner nil}]
-                                      :idempotency-key idempotency-key})]
+        (let [ids (vault/create! context
+                                 {:actor (:sub identity)
+                                  :data [{}]
+                                  :idempotency-key idempotency-key})]
           {:status 201
-           :body {:id (-> created first key)}}))
+           :body {:id (first ids)}}))
       (catch Exception error
         {:status (if (= ::anomaly/incorrect
                         (::anomaly/category (ex-data error)))

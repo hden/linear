@@ -4,7 +4,9 @@
    [cognitect.anomalies :as anomaly]
    [integrant.core :as ig]
    [linear.handler.turso.push :as push]
-   [linear.test :as test])
+   [linear.test :as test]
+   [linear.usecase.core :as core]
+   [linear.usecase.transaction :as transaction])
   (:import
    (java.io ByteArrayInputStream)
    (java.util Arrays)))
@@ -30,6 +32,21 @@
                   :stmt (statement "BEGIN IMMEDIATE" [])}]
                 (concat body [(step "COMMIT" [])]))
    :replication_index nil})
+
+(deftest sync-metadata-query-requires-pull-permission
+  (let [database (reify transaction/Transactable
+                   (-transact [_ _ _]
+                     (throw (ex-info "permission denied"
+                                     {:cognitect.anomalies/category
+                                      :cognitect.anomalies/forbidden}))))
+        metadata-query {:steps [{:stmt {:sql "SELECT pull_gen, change_id FROM turso_sync_last_change_id WHERE client_id = ?"
+                                        :want_rows true}}]}
+        response ((push/handler {::core/database database})
+                  {:identity {:sub "auth0|push-handler"}
+                   :path-params {:id "d-test"}
+                   :body-params {:requests [{:type "batch"
+                                             :batch metadata-query}]}})]
+    (is (= 403 (:status response)))))
 
 (deftest canonical-push-becomes-domain-statements
   (let [command (push/command

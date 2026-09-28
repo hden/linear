@@ -13,7 +13,6 @@
    :display-name "Primary"
    ::label "preserved"
    :vault {:id "v-1"
-           :owner nil
            :created java.time.Instant/EPOCH
            :keychain (reify keychain/Keychain
                        (-id [_] "test")

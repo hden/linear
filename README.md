@@ -27,3 +27,48 @@ Clojure commands. Include the repository directory for
 
 The development container provides both native libraries under
 `/usr/local/lib` and sets the JVM library path in `Dockerfile.dev`.
+
+## Authentication
+
+Linear requires an Auth0 API access token for every vault and sync request.
+Tokens must be signed with RS256 and contain the configured issuer, API
+audience, expiration, and a nonempty `sub`. The subject identifies the actor.
+The health endpoints remain public.
+
+`OIDC_ISSUER` and `OIDC_AUDIENCE` are required. `OIDC_JWKS_URL` is an
+optional trusted endpoint override:
+
+```sh
+OIDC_ISSUER="https://example.us.auth0.com/"
+OIDC_AUDIENCE="https://linear.example.com"
+# OIDC_JWKS_URL="https://example.us.auth0.com/.well-known/jwks.json"
+```
+
+Vault permissions are hierarchical: `pull < push < manage`. Creating a vault
+atomically grants `manage` to the creator. A manager can list, set, or revoke
+grants; the last manager may downgrade or revoke their own grant.
+
+Grant subjects are URL-encoded path segments. For example, to give
+`auth0|reader/email@example.com` pull access:
+
+```sh
+curl -X PUT \
+  -H "Authorization: Bearer $LINEAR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"permission":"pull"}' \
+  "$LINEAR_URL/control/v1/vaults/$VAULT_ID/grants/auth0%7Creader%2Femail%40example.com"
+
+curl \
+  -H "Authorization: Bearer $LINEAR_TOKEN" \
+  "$LINEAR_URL/control/v1/vaults/$VAULT_ID/grants"
+
+curl -X DELETE \
+  -H "Authorization: Bearer $LINEAR_TOKEN" \
+  "$LINEAR_URL/control/v1/vaults/$VAULT_ID/grants/auth0%7Creader%2Femail%40example.com"
+```
+
+Vault creation idempotency is scoped to the authenticated actor. Replaying a
+successful creation returns the original vault ID without repeating writes or
+restoring grants, even after that actor's grant is revoked. Reading vault data
+still requires the actor's current grant. Grant management authorization and
+each mutation run atomically in one PostgreSQL transaction.

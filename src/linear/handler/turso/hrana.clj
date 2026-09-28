@@ -117,6 +117,7 @@
   (let [category (::anomaly/category (ex-data error))
         status   (case category
                    ::anomaly/incorrect 400
+                   ::anomaly/forbidden 403
                    ::anomaly/conflict 409
                    500)]
     (pipeline-response status
