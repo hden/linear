@@ -65,6 +65,11 @@
     ["/d/:id/pull-updates" {:post :linear.handler.turso.pull/handler}]
     ["/d/:id/v2/pipeline" {:post :linear.handler.turso.push/handler}]
     ["/control/v1/vaults" {:post :linear.handler.vault/create}]
+    ["/control/v1/vaults/:id" {:get :linear.handler.vault/get-state
+                               :delete :linear.handler.vault/delete}]
+    ["/control/v1/vaults/:id/recovery-token"
+     {:get :linear.handler.vault/recovery-token
+      :put :linear.handler.vault/restore}]
     ["/control/v1/vaults/:id/grants" {:get :linear.handler.grant/list-grants}]
     ["/control/v1/vaults/:id/grants/:subject"
      {:put :linear.handler.grant/set-grant

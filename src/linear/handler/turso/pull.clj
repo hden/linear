@@ -26,6 +26,7 @@
              ::anomaly/incorrect 400
              ::anomaly/not-found 400
              ::anomaly/forbidden 403
+             ::anomaly/conflict 409
              500)
    :headers {"content-type" "application/octet-stream"}
    :body (.getBytes ^String (.getMessage ^Exception error) "UTF-8")})

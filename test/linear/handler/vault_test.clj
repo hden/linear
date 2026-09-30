@@ -46,3 +46,28 @@
           created  (create request)]
       (is (= 201 (:status created)))
       (is (string? (get-in created [:body :id]))))))
+
+(deftest ^:integration lifecycle-handlers-enforce-permissions-and-translate-errors
+  (with-system [system (run {:keys [:duct.database/sql :duct.migrator/ragtime]})]
+    (let [ctx (vault-context {:database (:duct.database.sql/hikaricp system)})
+          id (get-in ((handler/create ctx)
+                      {:identity {:sub "owner"}
+                       :headers {"idempotency-key" (str (random-uuid))}}) [:body :id])
+          req {:identity {:sub "owner"} :path-params {:id id}}
+          state (handler/get-state ctx)
+          token-fn (handler/recovery-token ctx)
+          delete-fn (handler/delete ctx)
+          restore-fn (handler/restore ctx)
+          token (get-in (token-fn req) [:body :token])]
+      (is (= {:id id :state "active"} (:body (state req))))
+      (is (string? token))
+      (doseq [f [state token-fn delete-fn restore-fn]]
+        (is (= 403 (:status (f (assoc req :identity {:sub "outsider"}
+                                 :body-params {:token token}))))))
+      (is (= 204 (:status (delete-fn req))))
+      (is (= "deleted" (get-in (state req) [:body :state])))
+      (is (= 409 (:status (token-fn req))))
+      (doseq [body [nil {} {:token 1} {:token "bad"} {:token token :extra true}]]
+        (is (= 400 (:status (restore-fn (assoc req :body-params body))))))
+      (is (= 204 (:status (restore-fn (assoc req :body-params {:token token})))))
+      (is (= "active" (get-in (state req) [:body :state]))))))

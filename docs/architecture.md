@@ -58,6 +58,18 @@ idempotency key returns those original IDs without repeating writes or
 restoring revoked grants; reading vault contents is a separate operation that
 checks the actor's current grant.
 
+Vault deletion clears only `ciphertext` and `encrypted_by`; identity, encrypted
+pages, and grants remain. Their presence defines `active` versus `deleted`.
+State retrieval requires `pull` without unwrapping a key. Token export, deletion,
+and restoration require `manage`. Deletion and restoration lock the vault row
+inside the PostgreSQL transaction, including retries after serialization conflicts.
+Restoration authenticates the wrapped key with the vault ID as associated data
+before storing the original ciphertext. Repeated deletion and restoration succeed;
+restoration never replaces an already active key. A deleted vault rejects new
+sync operations with a conflict, including sync metadata. An operation that has
+already obtained its key may finish. See [vault-lifecycle.md](vault-lifecycle.md)
+for the HTTP contract and recovery token requirements.
+
 Sync permission is checked after resolving the raw database's vault ID and
 before retrieving or decrypting the vault keychain. Pull requires `pull`; push
 requires `push`, and every revision-conflict retry resolves the database and

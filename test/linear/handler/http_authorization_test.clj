@@ -144,3 +144,67 @@
                                  :body metadata-body
                                  :token reader-jwt
                                  :headers {"content-type" "application/json"}})))))))))
+
+(deftest ^:integration vault-lifecycle-routes-and-deleted-sync-metadata
+  (with-open [fixture (jwt/fixture)]
+    (with-system [system (run {:keys [:duct.server.http/jetty :duct.migrator/ragtime]
+                               :vars (assoc (jwt/oidc-vars fixture) 'port 0)})]
+      (let [client (HttpClient/newHttpClient)
+            base-url (server-url system)
+            owner (str "lifecycle-owner-" (random-uuid))
+            token (jwt/access-token fixture {:subject owner})
+            {:keys [database-id vault-id]}
+            (postgres/create-database! {:datasource (:duct.database.sql/hikaricp system) :actor owner})
+            path (str "/control/v1/vaults/" vault-id)
+            call (fn [method suffix body]
+                   (http-request client base-url {:method method :path (str path suffix)
+                                                  :token token :body body
+                                                  :headers (when body {"content-type" "application/json"})}))
+            recovery (parse-json (call "GET" "/recovery-token" nil))
+            metadata-path (str "/d/" database-id "/v2/pipeline")
+            metadata-body "{\"requests\":[{\"type\":\"batch\",\"batch\":{\"steps\":[{\"stmt\":{\"sql\":\"SELECT pull_gen, change_id FROM turso_sync_last_change_id WHERE client_id = ?\",\"want_rows\":true}}]}}]}"]
+        (is (= "active" (:state (parse-json (call "GET" "" nil)))))
+        (is (= 204 (:status (call "DELETE" "" nil))))
+        (is (= 204 (:status (call "DELETE" "" nil))))
+        (is (= "deleted" (:state (parse-json (call "GET" "" nil)))))
+        (is (= 200 (:status (call "GET" "/grants" nil))))
+        (is (= 409 (:status (call "GET" "/recovery-token" nil))))
+        (is (= 409 (:status (http-request client base-url
+                              {:method "POST" :path metadata-path :token token
+                               :body metadata-body :headers {"content-type" "application/json"}}))))
+        (is (= 409 (:status (http-request client base-url
+                              {:method "POST" :path (str "/d/" database-id "/pull-updates")
+                               :token token :body ""
+                               :headers {"content-type" "application/octet-stream"}}))))
+        (is (= 409 (:status (http-request client base-url
+                              {:method "POST" :path metadata-path :token token
+                               :body (json/write-value-as-string
+                                       {:requests [{:type "batch"
+                                                    :batch {:replication_index nil
+                                                            :steps (mapv (fn [sql]
+                                                                           {:condition (when-not (= "BEGIN IMMEDIATE" sql)
+                                                                                         {:type "not" :cond {:type "is_autocommit"}})
+                                                                            :stmt {:sql sql :sql_id nil :args [] :named_args []
+                                                                                   :want_rows false :replication_index nil}})
+                                                                         ["BEGIN IMMEDIATE" "SELECT 1" "COMMIT"])}}]})
+                               :headers {"content-type" "application/json"}}))))
+        (is (= 400 (:status (call "PUT" "/recovery-token" "{\"token\":\"invalid\"}"))))
+        ;; This fixture's master key is deliberately outside the application context.
+        (is (= 400 (:status (call "PUT" "/recovery-token" (json/write-value-as-string recovery)))))
+        (let [created (http-request client base-url
+                        {:method "POST" :path "/control/v1/vaults" :token token
+                         :headers {"idempotency-key" (str (random-uuid))}})
+              id (:id (parse-json created))
+              created-path (str "/control/v1/vaults/" id)
+              args {:token token}
+              recovery-response (http-request client base-url
+                                  (assoc args :method "GET" :path (str created-path "/recovery-token")))
+              recovery-body (:body recovery-response)]
+          (is (= 200 (:status recovery-response)))
+          (is (= 204 (:status (http-request client base-url (assoc args :method "DELETE" :path created-path)))))
+          (dotimes [_ 2]
+            (is (= 204 (:status (http-request client base-url
+                                  (assoc args :method "PUT" :path (str created-path "/recovery-token")
+                                         :body recovery-body :headers {"content-type" "application/json"}))))))
+          (is (= "active" (:state (parse-json (http-request client base-url
+                                                (assoc args :method "GET" :path created-path)))))))))))

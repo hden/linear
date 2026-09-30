@@ -28,7 +28,7 @@
                                       :vault-id vault-id
                                       :permission permission})
         (-> database
-            (assoc :vault (u/run!! (vault/retriever vault-id) {:env env}))
+            (assoc :vault (vault/resolve-by-id tx {:vault-id vault-id :master-key master-key}))
             (dissoc :vault-id)))
       (throw (ex-info "Database was not found"
                       {::anomaly/category ::anomaly/not-found
@@ -101,9 +101,11 @@
   (transaction/with-transaction [tx (core/transactable context) {:read-only true}]
     (let [database (u/run!! (lab/fetch ::database database-id) {:env {:tx tx}})]
       (if-let [vault-id (:vault-id database)]
-        (grant/require-permission tx {:actor actor
-                                      :vault-id vault-id
-                                      :permission permission})
+        (do
+          (grant/require-permission tx {:actor actor
+                                        :vault-id vault-id
+                                        :permission permission})
+          (vault/require-active (vault/-read tx {:vault-id vault-id :lock? false})))
         (throw (ex-info "Database permission denied"
                         {::anomaly/category ::anomaly/forbidden
                          :reason ::grant/permission-denied

@@ -1,5 +1,6 @@
 (ns linear.usecase.vault-test
   (:require
+   [boring.core]
    [clojure.test :refer [deftest is]]
    [cognitect.anomalies :as anomaly]
    [duct.test :refer [with-system]]
@@ -58,6 +59,10 @@
                vault/Database
                (-create! [_ arg-map]
                  (vault/-create! tx arg-map))
+               (-read [_ arg-map]
+                 (vault/-read tx arg-map))
+               (-store-key! [_ arg-map]
+                 (vault/-store-key! tx arg-map))
                grant/Store
                (-permission [_ arg-map]
                  (grant/-permission tx arg-map))
@@ -266,3 +271,111 @@
                        nil
                        (catch clojure.lang.ExceptionInfo error error))]
         (is (= ::anomaly/forbidden (-> replayed ex-data ::anomaly/category)))))))
+
+(deftest ^:integration vault-deletion-and-recovery
+  (with-system [sys (run {:keys [:duct.database/sql :duct.migrator/ragtime]})]
+    (let [ctx (context (:duct.database.sql/hikaricp sys))
+          creation-key (str (random-uuid))
+          ids (vault/create! ctx {:actor "owner" :data [{} {}]
+                                  :idempotency-key creation-key})
+          id (first ids)
+          args {:actor "owner" :vault-id id}
+          state #'vault/get-state
+          token-fn #'vault/recovery-token
+          delete-fn #'vault/delete!
+          restore-fn #'vault/restore!
+          token (token-fn ctx args)
+          old-key (:keychain (get (vault/get-by-ids ctx {:actor "owner" :ids [id]}) id))
+          encrypted (keychain/encrypt old-key {:value (.getBytes "retained data" "UTF-8")})]
+      (is (= :active (:state (state ctx args))))
+      (dotimes [_ 2] (delete-fn ctx args))
+      (is (= :deleted (:state (state ctx args))))
+      (is (= [{:subject "owner" :permission :manage}]
+             (grant/list-grants ctx args)))
+      (is (thrown? clojure.lang.ExceptionInfo (token-fn ctx args)))
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (vault/get-by-ids ctx {:actor "owner" :ids [id]})))
+      (doseq [bad ["invalid" (token-fn ctx (assoc args :vault-id (second ids)))]]
+        (is (thrown? clojure.lang.ExceptionInfo (restore-fn ctx (assoc args :token bad))))
+        (is (= :deleted (:state (state ctx args)))))
+      (dotimes [_ 2] (restore-fn ctx (assoc args :token token)))
+      (is (= :active (:state (state ctx args))))
+      (let [restored (:keychain (get (vault/get-by-ids ctx {:actor "owner" :ids [id]}) id))]
+        (is (= "retained data" (String. ^bytes (keychain/decrypt restored {:ciphertext encrypted}) "UTF-8"))))
+      (grant/set-grant! ctx (assoc args :subject "reader" :permission :pull))
+      (is (= :active (:state (state ctx (assoc args :actor "reader")))))
+      (doseq [f [token-fn delete-fn restore-fn]]
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (f ctx (assoc args :actor "reader" :token token)))))
+      (is (= ids (vault/create! ctx {:actor "owner" :data [{}]
+                                     :idempotency-key creation-key}))))))
+
+(deftest ^:integration concurrent-lifecycle-operations-preserve-one-identity
+  (with-system [sys (run {:keys [:duct.database/sql :duct.migrator/ragtime]})]
+    (let [datasource (:duct.database.sql/hikaricp sys)
+          ctx (context datasource)
+          creation-key (str (random-uuid))
+          id (first (vault/create! ctx {:actor "owner" :data [{}] :idempotency-key creation-key}))
+          args {:actor "owner" :vault-id id}
+          token (#'vault/recovery-token ctx args)
+          delete-fn #'vault/delete!
+          restore-fn #'vault/restore!
+          state-fn #'vault/get-state
+          parallel (fn [operations]
+                     (let [start (CountDownLatch. 1)
+                           done (CountDownLatch. (count operations))
+                           calls (mapv (fn [operation]
+                                         (future
+                                           (try
+                                             (.await start)
+                                             (operation)
+                                             (finally (.countDown done))))) operations)]
+                       (try
+                         (.countDown start)
+                         (doseq [call calls]
+                           (is (nil? (deref call 10000 ::timeout))))
+                         (finally
+                           (.countDown start)
+                           (doseq [call calls]
+                             (when-not (realized? call) (future-cancel call)))
+                           (is (.await done 5 TimeUnit/SECONDS))))))]
+      (parallel [#(delete-fn ctx args) #(delete-fn ctx args)])
+      (is (= :deleted (:state (state-fn ctx args))))
+      (is (= [id] (vault/create! ctx {:actor "owner" :data [{}] :idempotency-key creation-key})))
+      (is (= :deleted (:state (state-fn ctx args))))
+      (parallel [#(restore-fn ctx (assoc args :token token))
+                 #(restore-fn ctx (assoc args :token token))])
+      (is (= :active (:state (state-fn ctx args))))
+      (parallel [#(delete-fn ctx args) #(restore-fn ctx (assoc args :token token))])
+      (is (contains? #{:active :deleted} (:state (state-fn ctx args))))
+      (restore-fn ctx (assoc args :token token))
+      (is (= 1 (row-count datasource :vaults [:= :id id])))
+      (is (= [{:subject "owner" :permission :manage}] (grant/list-grants ctx args))))))
+
+(deftest ^:integration recovery-authenticates-envelope-and-retains-deleted-state-on-failure
+  (with-system [sys (run {:keys [:duct.database/sql :duct.migrator/ragtime]})]
+    (let [ctx (context (:duct.database.sql/hikaricp sys))
+          [id other] (vault/create! ctx {:actor "owner" :data [{} {}]
+                                         :idempotency-key (str (random-uuid))})
+          args {:actor "owner" :vault-id id}
+          token-fn #'vault/recovery-token
+          restore-fn #'vault/restore!
+          state-fn #'vault/get-state
+          decode (fn [token] (boring.core/decode (.decode (java.util.Base64/getUrlDecoder) ^String token)))
+          encode (fn [value] (.encodeToString (.withoutPadding (java.util.Base64/getUrlEncoder))
+                                              (boring.core/encode value)))
+          original (decode (token-fn ctx args))
+          swapped (assoc (decode (token-fn ctx (assoc args :vault-id other))) 1 id)
+          malformed [(assoc original 0 2) (assoc original 3 (byte-array [1 2 3]))
+                     (assoc original 3 "not-bytes") (conj original "extra") swapped]]
+      (#'vault/delete! ctx args)
+      (doseq [value malformed]
+        (let [data (try (restore-fn ctx (assoc args :token (encode value)))
+                        (catch clojure.lang.ExceptionInfo error (ex-data error)))]
+          (is (= ::anomaly/incorrect (::anomaly/category data)))
+          (is (= :deleted (:state (state-fn ctx args))))))
+      (let [data (try (restore-fn (assoc ctx ::core/master-key nil)
+                        (assoc args :token (encode original)))
+                      (catch clojure.lang.ExceptionInfo error (ex-data error)))]
+        (is (= ::vault/master-key-not-configured (:reason data)))
+        (is (= :deleted (:state (state-fn ctx args))))))))

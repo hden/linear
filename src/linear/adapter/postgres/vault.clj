@@ -38,7 +38,16 @@
                                                             [:= :t.idempotency-key idempotency-key]]
                                                :order-by   [[:v.id :asc]]}})]
           {:ids (into (sorted-set) (keep :id rows))
-           :created? false})))))
+           :created? false}))))
+  (-read [tx {:keys [vault-id lock?]}]
+    (first (core/query tx {:statement (cond-> {:select [:id [:created-at :created] :ciphertext :encrypted-by]
+                                               :from :vaults
+                                               :where [:= :id vault-id]}
+                                        lock? (assoc :for :update))})))
+  (-store-key! [tx {:keys [vault-id ciphertext encrypted-by]}]
+    (core/query tx {:statement {:update :vaults
+                                :set {:ciphertext ciphertext :encrypted-by encrypted-by}
+                                :where [:= :id vault-id]}})))
 
 (lab/defretriever vault
   {:tag :linear.usecase.vault/vault}
