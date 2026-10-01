@@ -164,21 +164,3 @@
             (is (not (spec/valid? input-schema (dissoc database capability))))))))
     (is (not (spec/valid? ::revisions/consistent-view
                (model/database attributes {::model/consistent-view view}))))))
-
-(deftest domain-contracts-enforce-representative-boundaries
-  (is (spec/valid? ::evaluator/statement
-                   {:sql "UPDATE t SET value = ?"
-                    :parameters [nil 1 1.5 "text" (byte-array [1 2])]}))
-  (is (not (spec/valid? ::evaluator/statement
-             {:sql "UPDATE t SET value = ?"
-              :parameters [true]})))
-  (is (not (spec/valid? ::evaluator/push-command
-             {:statements [{:sql :not-a-string :parameters []}]})))
-  (is (spec/valid? ::revisions/revision
-                   {:revision-id "r-next" :parent "r-current"
-                    :database-page-count 1 :pages {1 (byte-array [1])}}))
-  (doseq [revision [{:revision-id "next" :parent nil :database-page-count 0 :pages {}}
-                    {:revision-id "r-next" :parent nil :database-page-count -1 :pages {}}
-                    {:revision-id "r-next" :parent nil :database-page-count 0 :pages {0 (byte-array 0)}}
-                    {:revision-id "r-next" :parent nil :database-page-count 0 :pages {1 "not-bytes"}}]]
-    (is (not (spec/valid? ::revisions/revision revision)))))

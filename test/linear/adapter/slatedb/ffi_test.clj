@@ -37,8 +37,7 @@
 
 (deftest identifies-a-fenced-database-handle
   (let [error (ffi/classify-error (Error$Closed. CloseReason/FENCED "fenced") {:operation :read-snapshot-values})]
-    (is (= ::ffi/fenced (:reason (ex-data error))))
-    (is (ffi/fenced? error))))
+    (is (= ::ffi/fenced (:reason (ex-data error))))))
 
 (deftest await-preserves-rejection-identity
   (let [error (ex-info "unavailable" {::anomaly/category ::anomaly/unavailable})]

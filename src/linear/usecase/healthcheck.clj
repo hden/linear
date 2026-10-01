@@ -1,17 +1,10 @@
 (ns linear.usecase.healthcheck
   (:require
-   [linear.spec :refer [spec-for]]
    [linear.usecase.core :as core]))
 
 (defprotocol Checkable
   (-ready? [checkable])
   (-ok? [checkable]))
-
-(defn checkable? [value]
-  (satisfies? Checkable value))
-
-(defmethod spec-for ::checkable [_]
-  [:fn checkable?])
 
 (defn- every-check? [context predicate]
   (try

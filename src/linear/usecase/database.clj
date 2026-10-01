@@ -118,9 +118,6 @@
                              (evaluator/initial-revision (core/evaluator context)))}))
           id)))))
 
-(defmethod spec-for ::database-id [_]
-  ::model/database-id)
-
 (defmethod spec-for ::database [_]
   ::model/database)
 
@@ -211,21 +208,3 @@
                                     :permission :pull
                                     :read-only true}]
     (model/sync-progress database arg-map)))
-
-(defn check-permission
-  [context {:keys [actor database-id permission]}]
-  (transaction/with-transaction [tx (core/transactable context) {:read-only true}]
-    (let [database (u/run!! (lab/fetch ::database database-id) {:env {:tx tx}})]
-      (if-let [vault-id (:vault-id database)]
-        (do
-          (grant/require-permission tx {:actor actor
-                                        :vault-id vault-id
-                                        :permission permission})
-          (vault/require-active (vault/-read tx {:vault-id vault-id :lock? false})))
-        (throw (ex-info "Database permission denied"
-                        {::anomaly/category ::anomaly/forbidden
-                         :reason ::grant/permission-denied
-                         :actor actor
-                         :database-id database-id
-                         :permission permission}))))
-    true))

@@ -3,10 +3,9 @@
   (:require
    [coffi.ffi :as coffi]
    [coffi.mem :as mem]
-   [linear.adapter.sqlite.core :refer [fault]]
-   [linear.spec :refer [spec-for]])
+   [linear.adapter.sqlite.core :refer [fault]])
   (:import
-   (java.lang.foreign FunctionDescriptor Linker Linker$Option MemoryLayout MemorySegment)
+   (java.lang.foreign FunctionDescriptor Linker Linker$Option MemoryLayout)
    (java.lang.invoke MethodHandle)))
 
 (def ^:const sqlite-ok 0)
@@ -14,9 +13,7 @@
 (def ^:const sqlite-done 101)
 (def ^:const sqlite-ioerr 10)
 (def ^:const sqlite-ioerr-short-read 522)
-(def ^:const sqlite-readonly 8)
 (def ^:const sqlite-notfound 12)
-(def ^:const sqlite-auth 23)
 (def ^:const sqlite-deny 1)
 (def ^:const sqlite-attach 24)
 (def ^:const sqlite-detach 25)
@@ -55,9 +52,6 @@
 (def ^:const sqlite-dbconfig-defensive 1010)
 (def ^:const sqlite-dbconfig-trusted-schema 1017)
 
-(defmethod spec-for ::handle [_]
-  [:fn #(instance? MemorySegment %)])
-
 (defonce ^:private api (atom nil))
 
 (defn- db-config-handle []
@@ -75,8 +69,7 @@
 
 (defn- create-api []
   (let [pointer ::mem/pointer]
-    {:libversion            (coffi/cfn "sqlite3_libversion" [] ::mem/c-string)
-     :db-config             (db-config-handle)
+    {:db-config             (db-config-handle)
      :enable-load-extension (coffi/cfn "sqlite3_enable_load_extension"
                               [pointer ::mem/int]
                               ::mem/int)
@@ -140,11 +133,6 @@
               :library "sqlite3"
               :library-path (System/getProperty "java.library.path")}
              error))))
-
-(defn version
-  {:malli/schema [:-> :string]}
-  []
-  ((:libversion @api)))
 
 (defn db-config [database option value]
   (let [^MethodHandle handle (:db-config @api)]

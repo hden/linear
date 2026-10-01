@@ -38,9 +38,6 @@
                (assoc :reason ::fenced))
              error)))
 
-(defn fenced? [error]
-  (= ::fenced (:reason (ex-data error))))
-
 (defn- unwrap-completion [error]
   (if (or (instance? CompletionException error)
           (instance? ExecutionException error))

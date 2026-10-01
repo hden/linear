@@ -1,3 +1,13 @@
+# Linear
+
+## Documentation
+
+- [Architecture](docs/architecture.md): dependency direction and capability boundaries.
+- [Testing](docs/testing.md): test commands, placement, and E2E scenarios.
+- [Vault lifecycle](docs/vault-lifecycle.md): deletion and recovery token APIs.
+- [Database lifecycle](docs/database-lifecycle.md): creation, rename, closure, and recovery APIs.
+- [Turso compatibility](docs/turso-compatibility.md): supported SDK, sync scope, and limitations.
+
 ## Native libraries
 
 The project selects Java 25 LTS through jenv using `.java-version`. On macOS,
@@ -29,9 +39,6 @@ The development container provides both native libraries under
 `/usr/local/lib` and sets the JVM library path in `Dockerfile.dev`.
 
 ## Authentication
-
-For the supported SDK version, sync behavior, and retry guarantees, see
-[Turso sync compatibility](docs/turso-compatibility.md).
 
 Linear requires an Auth0 API access token for every vault and sync request.
 Tokens must be signed with RS256 and contain the configured issuer, API

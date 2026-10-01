@@ -59,12 +59,6 @@
 (defprotocol ConsistentReadable
   (-read-consistently [reader f database]))
 
-(defn consistent-readable? [value]
-  (satisfies? ConsistentReadable value))
-
-(defmethod spec-for ::consistent-readable [_]
-  [:fn consistent-readable?])
-
 (defn read-consistently [reader {:keys [f database]}]
   (-read-consistently reader f database))
 

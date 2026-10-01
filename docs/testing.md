@@ -16,17 +16,18 @@ transport assurance that source-level coverage does not measure. It starts a
 local RSA/JWKS fixture, configures the application with that issuer and
 audience, and passes short-lived signed tokens to the JavaScript subprocess via
 environment variables. The SDK supplies those tokens through its `authToken`
-option. The scenario preserves the ordinary bootstrap, pull, push, concurrent
-merge, constraint, and chunked-pull checks, and also verifies that a pull-only
-actor can bootstrap but cannot push and an ungranted actor cannot bootstrap.
-No external identity provider is required for this test.
+option. No external identity provider is required.
 
-E2E creates resources through HTTP, bootstraps an empty DB, and verifies
-rename, closure, and recovery from a closed database.
+The [E2E scenario](../test/e2e/turso-sync.mjs) covers:
 
-Turso E2E also verifies lost-response retries, reconnect, and DDL rollback.
+- HTTP resource creation, empty bootstrap, rename, closure, and closed-source recovery;
+- incremental pull, local-write push, concurrent merge, and chunked pull;
+- lost-response retries, reconnect, SQL constraints, and DDL rollback;
+- pull-only bootstrap with push denied, and ungranted bootstrap denied.
+
 HTTP requests time out after 10 seconds; the client subprocess after 120 seconds.
-See [Turso compatibility](turso-compatibility.md) for the supported scope.
+See [Turso compatibility](turso-compatibility.md) for the supported SDK and
+remaining verification gaps.
 
 Tests live beside the boundary they exercise. Handler tests assert transport
 wire behavior, adapter tests exercise native and storage boundaries, and

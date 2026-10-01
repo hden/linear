@@ -1,7 +1,7 @@
 # Turso sync compatibility
 
 Compatibility is verified with the official `@tursodatabase/sync` JavaScript
-SDK **0.8.1** by [the E2E test](../test/e2e/turso-sync.mjs).
+SDK **0.8.1**. See [testing](testing.md) for the executable E2E scenarios.
 
 | Feature | Linear support |
 | --- | --- |
@@ -22,3 +22,22 @@ SDK **0.8.1** by [the E2E test](../test/e2e/turso-sync.mjs).
   generations return a conflict; unsupported pull options return HTTP 400.
 - Clients from earlier Linear versions need fresh local bootstrap because those
   versions discarded sync progress, which cannot be reconstructed.
+
+## Upstream verification gaps
+
+These upstream test identifiers track remaining implementation or verification
+work; they are not passing claims for Linear:
+
+| Upstream test | Remaining work |
+| --- | --- |
+| `bindings/python/tests/test_database_sync.py::test_partial_sync` | Query bootstrap; prefix selection via `server_pages_selector` is implemented locally. |
+| `bindings/javascript/sync/packages/native/promise.test.ts::partial sync` | Partial-sync concurrency, segment size, and prefetch. |
+| `bindings/python/tests/test_database_sync.py::test_pull_bytes_threshold` | Upstream edge cases beyond the basic repeated selector-based pulls covered by E2E. |
+| `bindings/javascript/sync/packages/common/run.ts::wait_changes` | Long-poll wake-up on a newly published revision. |
+
+The original upstream notes reported no official CLI sync server reference
+implementation for the missing capabilities, and a page handler that ignored
+`long_poll_timeout_ms`. Recheck those upstream observations when closing these gaps.
+
+Mark a gap as covered only after implementing the capability and verifying
+the corresponding client behavior.

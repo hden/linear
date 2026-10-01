@@ -40,42 +40,26 @@ approved harness change. There is no inline or command-line suppression.
 
 ## Authentication and vault authorization
 
-`linear.middleware.authentication` is the outer HTTP authentication boundary.
-It verifies RS256 access tokens against the configured issuer, audience, and
-JWKS provider, then replaces request identity with the verified `sub`. Health
-routes are public; vault and Turso sync routes require authentication. Handlers
-pass the subject inward as `:actor` and do not perform grant policy themselves.
+`linear.middleware.authentication` verifies access tokens and replaces request
+identity with the verified `sub`. Handlers pass that subject inward as `:actor`;
+the grant use-case owns permission policy. See [README](../README.md#authentication)
+for token configuration, public routes, and grant management examples.
 
-The grant use-case owns the `pull < push < manage` hierarchy, management
-authorization, and transaction boundaries. Its store protocol exposes raw
-batch set and revoke capabilities whose items may span multiple vaults.
-Higher-level operations compose those capabilities: vault creation writes the
-new vaults and creator `manage` grants in one transaction, while the HTTP grant
-routes compose singleton batches inside an authorized transaction. PostgreSQL
-implements the capability and persists one grant per vault and subject.
-Vault creation returns IDs only. A retry by the same actor with the same
-idempotency key returns those original IDs without repeating writes or
-restoring revoked grants; reading vault contents is a separate operation that
-checks the actor's current grant.
+The grant store exposes raw batch set and revoke capabilities across vaults.
+Vault creation composes vault writes and creator grants in one transaction;
+grant management composes singleton batches with authorization in one
+transaction. PostgreSQL persists one grant per vault and subject.
 
-Vault deletion clears only `ciphertext` and `encrypted_by`; identity, encrypted
-pages, and grants remain. Their presence defines `active` versus `deleted`.
-State retrieval requires `pull` without unwrapping a key. Token export, deletion,
-and restoration require `manage`. Deletion and restoration lock the vault row
-inside the PostgreSQL transaction, including retries after serialization conflicts.
-Restoration authenticates the wrapped key with the vault ID as associated data
-before storing the original ciphertext. Repeated deletion and restoration succeed;
-restoration never replaces an already active key. A deleted vault rejects new
-sync operations with a conflict, including sync metadata. An operation that has
-already obtained its key may finish. See [vault-lifecycle.md](vault-lifecycle.md)
-for the HTTP contract and recovery token requirements.
+Vault deletion and restoration lock the vault row inside the PostgreSQL
+transaction, including serialization-conflict retries. See
+[vault lifecycle](vault-lifecycle.md) for state transitions, permissions,
+recovery tokens, and the effect on sync operations.
 
-Sync permission is checked after resolving the raw database's vault ID and
-before retrieving or decrypting the vault keychain. Pull requires `pull`; push
-requires `push`, and every revision-conflict retry resolves the database and
-checks permission again. Sync metadata also requires `pull`. Authorization does
-not add cross-store locks, so an operation that has already passed its check may
-finish after its grant is revoked.
+Sync checks permission after resolving the raw database's vault ID and before
+retrieving or decrypting its keychain. Pull and metadata require `pull`; push
+requires `push`. Every revision-conflict retry resolves the database and checks
+permission again. Authorization adds no cross-store locks, so an operation
+that passed its check may finish after its grant is revoked.
 
 ## Application context
 
@@ -128,14 +112,11 @@ Database retrieval is composed in one PostgreSQL transaction as:
 raw database -> require grant for its vault ID -> composed vault
 ```
 
-Database closure retains `current_attributes` and records a tombstone. Normal
-sync retrieval joins current attributes and excludes tombstoned identities.
-Both missing and closed identities produce `database-not-found`; they never
-become operable sync models. Management retrieval includes tombstones so closed
-resources remain readable and available as revision-based recovery sources.
-See [database-lifecycle.md](database-lifecycle.md) for the HTTP contract.
-Vault composition resolves the configured master key and decrypts the data key
-before the database is used.
+Normal sync retrieval joins current attributes and excludes tombstones;
+missing and closed identities both produce `database-not-found`. Management
+retrieval includes tombstones. Vault composition resolves the configured
+master key and decrypts the data key before sync uses the database. See
+[database lifecycle](database-lifecycle.md) for closure and recovery semantics.
 
 The Labrador tags are stable internal contracts. Composition must not be moved
 into a PostgreSQL retriever merely because both facts currently come from the
