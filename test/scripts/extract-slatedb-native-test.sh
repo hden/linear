@@ -3,7 +3,8 @@
 set -eu
 
 project_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-slatedb_jar=$(find "$HOME/.m2/repository/io/slatedb/slatedb-uniffi" -name 'slatedb-uniffi-*.jar' -print -quit)
+slatedb_jar=$(cd "$project_root" && clojure -Spath | tr ':' '\n' \
+  | awk '/\/slatedb-uniffi-[^/]+\.jar$/ { print; exit }')
 
 case "$(uname -m)" in
   arm64 | aarch64) platform=darwin-aarch64 ;;

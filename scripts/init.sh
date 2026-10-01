@@ -16,15 +16,15 @@ case "$(uname -m)" in
     ;;
 esac
 
-slatedb_jar=$(find "$HOME/.m2/repository/io/slatedb/slatedb-uniffi" \
-  -name 'slatedb-uniffi-*.jar' -print -quit)
+project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+slatedb_jar=$(cd "$project_root" && clojure -Spath | tr ':' '\n' \
+  | awk '/\/slatedb-uniffi-[^/]+\.jar$/ { print; exit }')
 
 if [ -z "$slatedb_jar" ]; then
-  printf 'SlateDB UniFFI JAR was not found in the local Maven repository.\n' >&2
+  printf 'SlateDB UniFFI JAR was not found on the resolved classpath.\n' >&2
   exit 1
 fi
 
-project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 temporary_library=$(mktemp "$project_root/.libslatedb_uniffi.dylib.XXXXXX")
 trap 'rm -f "$temporary_library"' EXIT HUP INT TERM
 

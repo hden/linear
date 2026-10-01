@@ -30,7 +30,8 @@ RUN clojure -P \
       arm64) slatedb_platform=linux-aarch64 ;; \
       *) exit 1 ;; \
     esac \
- && slatedb_jar=$(find /root/.m2/repository/io/slatedb/slatedb-uniffi -name 'slatedb-uniffi-*.jar' -print -quit) \
+ && slatedb_jar=$(clojure -Spath | tr ':' '\n' | awk '/\/slatedb-uniffi-[^/]+\.jar$/ { print; exit }') \
+ && test -n "$slatedb_jar" \
  && unzip -p "$slatedb_jar" "$slatedb_platform/libslatedb_uniffi.so" > /usr/local/lib/libslatedb_uniffi.so \
  && sqlite_library=$(find /usr/lib -name libsqlite3.so -print -quit) \
  && test -n "$sqlite_library" \

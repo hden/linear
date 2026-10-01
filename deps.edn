@@ -1,31 +1,31 @@
 {:paths ["src" "resources"]
- :deps {org.clojure/clojure                 {:mvn/version "1.12.5"}
+ :deps {org.clojure/clojure                 {:mvn/version "1.12.6"}
         org.apache.commons/commons-pool2    {:mvn/version "2.13.1"}
-        org.duct-framework/main             {:mvn/version "0.4.7"}
+        org.duct-framework/main             {:mvn/version "0.4.9"}
         org.duct-framework/module.logging   {:mvn/version "0.6.6"}
         org.duct-framework/module.sql       {:mvn/version "0.9.0"}
         org.duct-framework/module.web       {:mvn/version "0.13.5"}
         org.duct-framework/test             {:mvn/version "0.1.0"}
-        org.postgresql/postgresql           {:mvn/version "42.7.7"}
-        org.replikativ/boring               {:mvn/version "0.1.27"}
+        org.postgresql/postgresql           {:mvn/version "42.7.13"}
+        org.replikativ/boring               {:mvn/version "0.1.30"}
         org.suskalo/coffi                   {:mvn/version "1.0.615"}
         com.cognitect/anomalies             {:mvn/version "0.1.12"}
         com.github.hden/ulid                {:mvn/version "0.1.0"}
         com.github.seancorfield/next.jdbc   {:mvn/version "1.3.1118"}
-        com.github.seancorfield/honeysql    {:mvn/version "2.7.1425"}
+        com.github.seancorfield/honeysql    {:mvn/version "2.7.1479"}
         com.taoensso/tempel                 {:mvn/version "1.1.0"}
         camel-snake-kebab/camel-snake-kebab {:mvn/version "0.4.3"}
-        diehard/diehard                     {:mvn/version "0.12.0"}
-        io.slatedb/slatedb-uniffi           {:mvn/version "0.15.0"}
-        org.roaringbitmap/RoaringBitmap    {:mvn/version "1.3.0"}
+        diehard/diehard                     {:mvn/version "0.12.1"}
+        io.slatedb/slatedb-uniffi           {:mvn/version "0.17.0"}
+        org.roaringbitmap/RoaringBitmap    {:mvn/version "1.6.23"}
         funcool/promesa                     {:mvn/version "12.0.1"}
         com.github.hden/labrador            {:mvn/version "0.2.0"}
-        metosin/malli                       {:mvn/version "0.20.1"}
+        metosin/malli                       {:mvn/version "0.20.2"}
         hden/duct.auth.jwks                 {:mvn/version "0.2.2"}
-        buddy/buddy-sign                    {:mvn/version "3.4.333"}}
+        buddy/buddy-sign                    {:mvn/version "3.5.351"}}
  :aliases
  {:test {:extra-paths ["test"]
-         :extra-deps {org.xerial/sqlite-jdbc {:mvn/version "3.53.0.0"}
+         :extra-deps {org.xerial/sqlite-jdbc {:mvn/version "3.53.4.0"}
                       ring/ring-mock       {:mvn/version "0.6.2"}}}
   :duct {:jvm-opts ["--enable-native-access=ALL-UNNAMED"]
          :main-opts ["-m" "duct.main"]}
@@ -51,7 +51,7 @@
   :cov  {:extra-paths ["test"]
          :extra-deps {cloverage/cloverage       {:mvn/version "1.2.4"}
                       ring/ring-mock            {:mvn/version "0.6.2"}
-                      org.xerial/sqlite-jdbc     {:mvn/version "3.53.0.0"}}
+                      org.xerial/sqlite-jdbc     {:mvn/version "3.53.4.0"}}
          :jvm-opts ["--enable-native-access=ALL-UNNAMED"]
          :main-opts ["-m" "cloverage.coverage"
                      "-p" "src"
@@ -65,6 +65,6 @@
                       {:mvn/version "0.6.2"}}
          :main-opts ["-m" "crap4clj.core"]}
   :e2e {:extra-paths ["test"]
-        :extra-deps {org.xerial/sqlite-jdbc {:mvn/version "3.53.0.0"}}
+        :extra-deps {org.xerial/sqlite-jdbc {:mvn/version "3.53.4.0"}}
         :jvm-opts ["--enable-native-access=ALL-UNNAMED"]
         :main-opts ["-m" "linear.e2e"]}}}

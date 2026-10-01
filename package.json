@@ -6,6 +6,6 @@
     "e2e": "node test/e2e/turso-sync.mjs"
   },
   "dependencies": {
-    "@tursodatabase/sync": "0.7.1"
+    "@tursodatabase/sync": "0.8.1"
   }
 }
