@@ -16,6 +16,7 @@ services:
       - postgres-data:/var/lib/postgresql
 
   app:
+    init: true
     build:
       context: .
       dockerfile: Dockerfile.dev

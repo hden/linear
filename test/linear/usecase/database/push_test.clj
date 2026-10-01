@@ -43,6 +43,82 @@
    ::core/revision-store store
    ::core/evaluator evaluator})
 
+(defn- sync-command [statements progress]
+  {:sync-progress progress
+   :statements (into [{:sql "CREATE TABLE IF NOT EXISTS turso_sync_last_change_id (client_id TEXT PRIMARY KEY, pull_gen INTEGER, change_id INTEGER)"
+                       :parameters []}]
+                 (concat statements
+                         [{:sql "INSERT INTO turso_sync_last_change_id(client_id, pull_gen, change_id) VALUES (?, ?, ?) ON CONFLICT(client_id) DO UPDATE SET pull_gen=excluded.pull_gen, change_id=excluded.change_id"
+                           :parameters [(:client-id progress) (:generation progress) (:change-id progress)]}]))})
+
+(deftest ^:integration sync-progress-and-data-are-published-once-and-fail-together
+  (with-system [system (run {:keys [:duct.database/sql :duct.migrator/ragtime
+                                    :linear.adapter.slatedb.store/store
+                                    :linear.adapter.sqlite.evaluator/evaluator]})]
+    (let [datasource (:duct.database.sql/hikaricp system)
+          store (:linear.adapter.slatedb.store/store system)
+          evaluator (:linear.adapter.sqlite.evaluator/evaluator system)
+          {:keys [database-id master-key keychain vault-id]}
+          (postgres-data/create-database! {:datasource datasource})
+          context (application-context datasource master-key store evaluator)
+          args {:actor "actor-1" :database-id database-id}
+          progress {:client-id "client" :generation 0 :change-id 1}
+          command (sync-command [{:sql "UPDATE t SET value = 'saved' WHERE id = 1" :parameters []}]
+                                progress)]
+      (slatedb-data/store-root! {:store store :database-id database-id :keychain keychain
+                                 :pages (sqlite-data/pages {:image (sqlite-data/sqlite-image)})})
+      (is (nil? (database/sync-progress context (assoc args :client-id "client"))))
+      (let [revision (database/push! context (assoc args :command command))]
+        (is (= progress (database/sync-progress context (assoc args :client-id "client"))))
+        (is (nil? (database/push! context (assoc args :command command))))
+        (is (= (:revision-id revision) (:server-revision (database/pull context args))))
+        (is (thrown? Exception
+                     (database/push! context
+                       (assoc args :command
+                              (sync-command [{:sql "UPDATE t SET value = 'rolled-back' WHERE id = 1" :parameters []}
+                                             {:sql "INSERT INTO t VALUES (1, 'duplicate')" :parameters []}]
+                                            (assoc progress :change-id 2))))))
+        (is (= progress (database/sync-progress context (assoc args :client-id "client"))))
+        (is (= (:revision-id revision) (:server-revision (database/pull context args))))
+        (grant/set-grant! context {:actor "actor-1" :vault-id vault-id
+                                   :subject "reader" :permission :pull})
+        (is (= progress (database/sync-progress context (assoc args :actor "reader" :client-id "client"))))
+        (is (= ::anomaly/forbidden
+               (::anomaly/category
+                 (catch-ex-data #(database/push! context (assoc args :actor "reader" :command command))))))
+        (is (= ::anomaly/forbidden
+               (::anomaly/category
+                 (catch-ex-data #(database/sync-progress context (assoc args :actor "unknown" :client-id "client"))))))))))
+
+(deftest ^:integration publication-conflict-rereads-sync-progress-before-replay
+  (with-system [system (run {:keys [:duct.database/sql :duct.migrator/ragtime]})]
+    (let [datasource (:duct.database.sql/hikaricp system)
+          {:keys [database-id master-key]} (postgres-data/create-database! {:datasource datasource})
+          progress {:client-id "client" :generation 0 :change-id 1}
+          stored (atom nil)
+          evaluations (atom 0)
+          publications (atom 0)
+          reads (atom 0)
+          store (reify revisions/ConsistentReadable
+                  (-read-consistently [_ f _] (f (view (atom []) "r-current")))
+                  revisions/RevisionWritable
+                  (-publish-next! [_ _ _]
+                    (swap! publications inc)
+                    (reset! stored progress)
+                    (throw (ex-info "concurrent publication" {:reason ::revisions/revision-conflict}))))
+          evaluator (reify evaluator/SyncProgressReadable
+                      (-sync-progress [_ _] (swap! reads inc) @stored)
+                      evaluator/Evaluator
+                      (-evaluate [_ _]
+                        (swap! evaluations inc)
+                        {:revision-id "r-next" :parent "r-current" :database-page-count 1 :pages {}}))]
+      (is (nil? (database/push! (application-context datasource master-key store evaluator)
+                  {:actor "actor-1" :database-id database-id
+                   :command {:statements [] :sync-progress progress}})))
+      (is (= 2 @reads))
+      (is (= 1 @evaluations))
+      (is (= 1 @publications)))))
+
 (deftest ^:integration permissions-gate-database-and-grant-operations
   (with-system [system (run {:keys [:duct.database/sql
                                     :duct.migrator/ragtime]})]

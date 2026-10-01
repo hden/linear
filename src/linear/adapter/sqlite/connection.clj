@@ -279,37 +279,54 @@
                (merge {:reason ::statement-failed}
                       (sqlite-diagnostics database result)))))))
 
-(defn execute-statement
-  {:malli/schema [:-> ::connection ::evaluator/statement :nil]}
-  [connection {:keys [sql parameters]}]
+(defn- statement-finalization-error [database statement]
+  (try
+    (let [result (ffi/finalize statement)]
+      (when-not (= ffi/sqlite-ok result)
+        (fault "SQLite statement finalization failed"
+               (merge {:reason ::statement-finalization-failed}
+                      (sqlite-diagnostics database result)))))
+    (catch Exception error error)))
+
+(defn- with-statement [connection {:keys [sql parameters]} f]
   (ensure-open! connection)
   (let [database (:handle connection)]
     (with-open [arena (mem/confined-arena)]
       (let [statement (prepare! database arena sql)
-            outcome   (try
-                        (bind-parameters! database statement arena parameters)
-                        (step-to-completion! database statement)
-                        {:value nil}
-                        (catch Exception error
-                          {:error error}))
-            finalize-result (ffi/finalize statement)
-            finalize-error (when-not (= ffi/sqlite-ok finalize-result)
-                             (try
-                               (fault "SQLite statement finalization failed"
-                                      (merge {:reason ::statement-finalization-failed}
-                                             (sqlite-diagnostics database finalize-result)))
-                               (catch Exception error
-                                 error)))
-            error      (:error outcome)]
+            finalization-error (volatile! nil)
+            outcome (try
+                      (bind-parameters! database statement arena parameters)
+                      {:value (f database statement)}
+                      (catch Exception error {:error error})
+                      (finally
+                        (vreset! finalization-error
+                                 (statement-finalization-error database statement))))]
         (cond
-          error
-          (throw (add-suppressed! error finalize-error))
+          (:error outcome) (throw (add-suppressed! (:error outcome) @finalization-error))
+          @finalization-error (throw @finalization-error)
+          :else (:value outcome))))))
 
-          finalize-error
-          (throw finalize-error)
+(defn execute-statement
+  {:malli/schema [:-> ::connection ::evaluator/statement :nil]}
+  [connection arg-map]
+  (with-statement connection arg-map step-to-completion!))
 
-          :else
-          nil)))))
+(defn query-integers
+  {:malli/schema [:-> ::connection ::evaluator/statement [:maybe [:vector :int]]]}
+  [connection arg-map]
+  (with-statement
+    connection arg-map
+    (fn [database statement]
+      (let [result (ffi/step statement)]
+        (cond
+          (= ffi/sqlite-done result) nil
+          (= ffi/sqlite-row result)
+          (mapv (fn [index]
+                  (when-not (= 1 (ffi/column-type statement {:index index}))
+                    (fault "SQLite query returned a non-integer column" {:index index}))
+                  (ffi/column-int64 statement {:index index}))
+                (range (ffi/column-count statement)))
+          :else (fault "SQLite query failed" (sqlite-diagnostics database result)))))))
 
 (defn close
   {:malli/schema [:-> ::connection :nil]}

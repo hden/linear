@@ -30,7 +30,30 @@
   [attributes {:as capabilities}]
   (merge attributes
          (select-keys capabilities
-                      [::consistent-view ::evaluator ::revision-writable])))
+                      [::consistent-view ::evaluator ::revision-writable ::sync-progress-reader])))
+
+(defn sync-progress
+  {:malli/schema [:->
+                  [:and ::database
+                   [:map [::consistent-view ::revisions/consistent-view]
+                    [::sync-progress-reader ::evaluation/sync-progress-readable]]]
+                  [:map [:client-id [:string {:min 1}]]]
+                  [:maybe ::evaluation/sync-progress]]}
+  [database {:keys [client-id]}]
+  (evaluation/sync-progress (::sync-progress-reader database)
+                            {:snapshot (revisions/head (consistent-view database))
+                             :client-id client-id}))
+
+(defn- already-applied? [database snapshot progress]
+  (when progress
+    (when-let [stored (evaluation/sync-progress (::sync-progress-reader database)
+                                                {:snapshot snapshot :client-id (:client-id progress)})]
+      (when (< (:generation progress) (:generation stored))
+        (throw (ex-info "Push generation is stale"
+                        {::anomaly/category ::anomaly/conflict
+                         :reason :linear.usecase.database/stale-sync-generation})))
+      (and (= (:generation stored) (:generation progress))
+           (<= (:change-id progress) (:change-id stored))))))
 
 (defn evaluate
   {:malli/schema [:->
@@ -39,19 +62,20 @@
                     [::consistent-view ::revisions/consistent-view]
                     [::evaluator ::evaluation/evaluator]]]
                   ::evaluation/push-command
-                  ::revisions/revision]}
+                  [:maybe ::revisions/revision]]}
   [database {:as command}]
   (let [snapshot (revisions/head (consistent-view database))
-        parent (revisions/revision-id snapshot)
-        revision (evaluation/evaluate (evaluator database)
-                                      {:snapshot snapshot :command command})]
-    (when-not (= parent (:parent revision))
-      (throw (ex-info "Evaluator revision does not descend from the snapshot"
-                      {::anomaly/category ::anomaly/fault
-                       :reason :linear.usecase.database/invalid-revision-parent
-                       :expected-parent parent
-                       :actual-parent (:parent revision)})))
-    revision))
+        parent (revisions/revision-id snapshot)]
+    (when-not (already-applied? database snapshot (:sync-progress command))
+      (when-let [revision (evaluation/evaluate (evaluator database)
+                            {:snapshot snapshot :command command})]
+        (when-not (= parent (:parent revision))
+          (throw (ex-info "Evaluator revision does not descend from the snapshot"
+                          {::anomaly/category ::anomaly/fault
+                           :reason :linear.usecase.database/invalid-revision-parent
+                           :expected-parent parent
+                           :actual-parent (:parent revision)})))
+        revision))))
 
 (defn pull
   {:malli/schema [:->

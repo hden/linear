@@ -59,6 +59,19 @@
         (is (= ::connection/connection-closed
                (:reason (ex-data failure))))))))
 
+(deftest ^:integration constraint-error-survives-statement-finalization
+  (call-with-native-connection
+    (fn [database]
+      (connection/execute database "PRAGMA locking_mode = EXCLUSIVE")
+      (connection/execute database "CREATE TABLE unique_ids (id INTEGER PRIMARY KEY); INSERT INTO unique_ids VALUES (1)")
+      (let [failure (try
+                      (connection/execute-statement database {:sql "INSERT INTO unique_ids VALUES (1)" :parameters []})
+                      nil
+                      (catch clojure.lang.ExceptionInfo error error))]
+        (is (= ::connection/statement-failed (:reason (ex-data failure))))
+        (is (string/includes? (:sqlite-message (ex-data failure)) "UNIQUE constraint failed"))
+        (is (= [1] (connection/query-integers database {:sql "SELECT COUNT(*) FROM unique_ids" :parameters []})))))))
+
 (deftest ^:integration close-is-idempotent
   (call-with-native-connection
     (fn [database]

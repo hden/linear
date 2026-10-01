@@ -45,9 +45,13 @@
   ([] (run {}))
   ([options]
    (let [config   (or (:config options) (load-config))
-         profiles (or (:profiles options) [:test :main])]
+         profiles (or (:profiles options) [:test :main])
+         vars (merge (when-let [url (System/getenv "JDBC_DATABASE_URL")]
+                       {'jdbc-url url})
+                     (:vars options))]
      (duct-test/run (assoc options
                            :config   (resolve-migrations config)
+                           :vars vars
                            :profiles profiles)))))
 
 (defn catch-ex-data [f]

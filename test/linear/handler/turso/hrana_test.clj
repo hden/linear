@@ -9,6 +9,22 @@
            (hrana/single-batch {:requests [{:type "batch"
                                             :batch batch}]})))))
 
+(deftest pipeline-rejects-extra-requests-and-non-null-batons
+  (doseq [pipeline [{:requests [{:type "execute"} {:type "batch" :batch {:steps []}}]}
+                    {:baton "old-stream" :requests [{:type "batch" :batch {:steps []}}]}]]
+    (is (thrown? clojure.lang.ExceptionInfo (hrana/single-batch pipeline)))))
+
+(deftest rolled-back-batch-reports-the-failed-commit-and-unexecuted-steps
+  (let [response (hrana/batch-error-response
+                   {:steps [{} {} {} {} {}]}
+                   {:error (ex-info "duplicate column name: x" {:statement-index 1})
+                    :wire-indexes [1 2 3]})
+        result (get-in response [:body :results 0 :response :result])]
+    (is (= [true true false false false] (mapv some? (:step_results result))))
+    (is (= "duplicate column name: x" (get-in result [:step_errors 2 :message])))
+    (is (= "TRANSACTION_ROLLED_BACK" (get-in result [:step_errors 4 :code])))
+    (is (nil? (get-in result [:step_errors 3])))))
+
 (deftest successful-batch-response-preserves-step-count
   (let [response (hrana/batch-response 2)]
     (is (= 200 (:status response)))
@@ -30,8 +46,14 @@
 
 (deftest sync-metadata-response-reports-an-unknown-client-as-an-empty-result
   (is (empty?
-        (get-in (hrana/last-change-id-response)
+        (get-in (hrana/last-change-id-response nil)
                 [:body :results 0 :response :result :step_results 0 :rows]))))
+
+(deftest sync-metadata-response-encodes-the-full-integer-range-as-strings
+  (is (= [[{:type "integer" :value "2"}
+           {:type "integer" :value "9223372036854775807"}]]
+         (get-in (hrana/last-change-id-response {:generation 2 :change-id 9223372036854775807})
+                 [:body :results 0 :response :result :step_results 0 :rows]))))
 
 (deftest malformed-pipeline-response-is-an-http-client-error
   (is (= 400

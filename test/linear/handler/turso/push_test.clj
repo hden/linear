@@ -15,6 +15,12 @@
   {:type "not"
    :cond {:type "is_autocommit"}})
 
+(def ^:private progress-upsert
+  "INSERT INTO turso_sync_last_change_id(client_id, pull_gen, change_id) VALUES (?, ?, ?) ON CONFLICT(client_id) DO UPDATE SET pull_gen=excluded.pull_gen, change_id=excluded.change_id")
+
+(def ^:private progress-query
+  "SELECT pull_gen, change_id FROM turso_sync_last_change_id WHERE client_id = ?")
+
 (defn- statement [sql args]
   {:sql sql
    :sql_id nil
@@ -39,7 +45,8 @@
                      (throw (ex-info "permission denied"
                                      {:cognitect.anomalies/category
                                       :cognitect.anomalies/forbidden}))))
-        metadata-query {:steps [{:stmt {:sql "SELECT pull_gen, change_id FROM turso_sync_last_change_id WHERE client_id = ?"
+        metadata-query {:steps [{:stmt {:sql progress-query
+                                        :args [{:type "text" :value "client"}]
                                         :want_rows true}}]}
         response ((push/handler {::core/database database})
                   {:identity {:sub "auth0|push-handler"}
@@ -66,7 +73,7 @@
     (is (= [nil 42 1.5 "hello"] (subvec parameters 0 4)))
     (is (Arrays/equals (byte-array [1 2]) (nth parameters 4)))))
 
-(deftest canonical-push-removes-turso-metadata-and-retains-wire-indexes-at-boundary
+(deftest canonical-push-retains-metadata-and-extracts-sync-progress
   (let [parsed (push/parse-command
                  {:body-size 1024
                   :batch
@@ -75,14 +82,40 @@
                      (step "UPDATE t SET value = ? WHERE id = ?"
                            [{:type "text" :value "from-js"}
                             {:type "integer" :value "1"}])
-                     (step "INSERT INTO turso_sync_last_change_id(client_id, pull_gen, change_id) VALUES (?, ?, ?) ON CONFLICT(client_id) DO UPDATE SET pull_gen=excluded.pull_gen, change_id=excluded.change_id"
-                            [{:type "text" :value "client"}
-                             {:type "integer" :value "0"}
-                             {:type "integer" :value "1"}])])})]
-    (is (= ["UPDATE t SET value = ? WHERE id = ?"]
-           (mapv :sql (get-in parsed [:command :statements]))))
-    (is (= [2] (:wire-indexes parsed)))
+                     (step progress-upsert
+                       [{:type "text" :value "client"}
+                        {:type "integer" :value "0"}
+                        {:type "integer" :value "1"}])])})]
+    (is (= 3 (count (get-in parsed [:command :statements]))))
+    (is (= {:client-id "client" :generation 0 :change-id 1}
+           (get-in parsed [:command :sync-progress])))
+    (is (= [1 2 3] (:wire-indexes parsed)))
     (is (nil? (get-in parsed [:command :statements 0 :wire-index])))))
+
+(deftest sync-progress-rejects-invalid-identities-and-counter-types
+  (let [valid-args [{:type "text" :value "client"}
+                    {:type "integer" :value "0"}
+                    {:type "integer" :value "1"}]]
+    (doseq [[case-name index invalid-value]
+            [[:empty-client-id 0 {:type "text" :value ""}]
+             [:numeric-client-id 0 {:type "integer" :value "1"}]
+             [:text-generation 1 {:type "text" :value "0"}]
+             [:negative-generation 1 {:type "integer" :value "-1"}]]]
+      (is (= ::anomaly/incorrect
+             (::anomaly/category
+               (test/catch-ex-data
+                 #(push/command
+                    {:body-size 1024
+                     :batch (batch [(step progress-upsert
+                                      (assoc valid-args index invalid-value))])}))))
+          (name case-name)))))
+
+(deftest malformed-pipeline-and-metadata-arguments-return-client-errors
+  (doseq [pipeline [{:requests 1}
+                    {:requests [{:type "batch"
+                                 :batch {:steps [{:stmt {:sql progress-query
+                                                         :want_rows true :args 1}}]}}]}]]
+    (is (= 400 (:status ((push/handler {}) {:body-params pipeline}))))))
 
 (deftest rejects-noncanonical-transaction-shapes
   (doseq [invalid

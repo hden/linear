@@ -24,7 +24,14 @@ assert(ungrantedToken, "LINEAR_E2E_UNGRANTED_TOKEN is required");
 
 const clients = [];
 
-const control = (method, path, body, idempotencyKey) => fetch(`${baseUrl}${path}`, {
+const timedFetch = (input, init = {}) => globalThis.fetch(input, {
+  ...init,
+  signal: init.signal
+    ? AbortSignal.any([init.signal, AbortSignal.timeout(10_000)])
+    : AbortSignal.timeout(10_000)
+});
+
+const control = (method, path, body, idempotencyKey) => timedFetch(`${baseUrl}${path}`, {
   method,
   headers: {
     authorization: `Bearer ${managerToken}`,
@@ -35,7 +42,7 @@ const control = (method, path, body, idempotencyKey) => fetch(`${baseUrl}${path}
 });
 
 const createdVault = await control("POST", "/control/v1/vaults", null, randomUUID());
-assert.equal(createdVault.status, 201);
+assert.equal(createdVault.status, 201, await createdVault.clone().text());
 const vaultId = (await createdVault.json()).id;
 const collection = `/control/v1/vaults/${vaultId}/databases`;
 const createDatabase = async (body) => {
@@ -62,6 +69,7 @@ const connectClient = async (name, options = {}) => {
     url,
     clientName: `linear-e2e-${name}`,
     authToken: managerToken,
+    fetch: timedFetch,
     ...options
   });
   clients.push(client);
@@ -164,7 +172,7 @@ try {
   let thresholdPulls = 0;
   const countingFetch = async (...args) => {
     if (String(args[0]).endsWith("/pull-updates")) thresholdPulls += 1;
-    return globalThis.fetch(...args);
+    return timedFetch(...args);
   };
   const thresholdClient = await connectClient("threshold", {
     pullBytesThreshold: 8192,
@@ -174,6 +182,63 @@ try {
     { count: 50 }
   ]);
   assert(thresholdPulls > 1, `expected chunked bootstrap, got ${thresholdPulls} pull`);
+
+  await clientA.exec("CREATE TABLE retry_counter (id INTEGER PRIMARY KEY, value INTEGER)");
+  await clientA.exec("INSERT INTO retry_counter VALUES (1, 0)");
+  await clientA.push();
+
+  const incrementTransform = mutation => mutation.tableName === "retry_counter"
+    ? { operation: "rewrite", stmt: { sql: "UPDATE retry_counter SET value = value + 1 WHERE id = 1", values: [] } }
+    : null;
+
+  let discarded = false;
+  let replayRequest;
+  const losingFetch = async (input, init) => {
+    const response = await timedFetch(input, init);
+    if (!discarded && String(input).endsWith("/v2/pipeline") &&
+        JSON.parse(Buffer.from(init.body).toString()).requests[0].batch.steps.length > 1) {
+      assert.equal(response.status, 200, await response.clone().text());
+      await response.arrayBuffer();
+      discarded = true;
+      replayRequest = { input, init: { ...init, body: Buffer.from(init.body) } };
+      throw new Error("response discarded after commit");
+    }
+    return response;
+  };
+  const retryClient = await connectClient("retry", { fetch: losingFetch, transform: incrementTransform });
+  await retryClient.exec("UPDATE retry_counter SET value = value + 1 WHERE id = 1");
+  await assert.rejects(() => retryClient.push(), /response discarded after commit/);
+  assert(discarded);
+  const exactReplay = await timedFetch(replayRequest.input, replayRequest.init);
+  assert.equal(exactReplay.status, 200, await exactReplay.clone().text());
+  const replayResult = await exactReplay.json();
+  assert(replayResult.results[0].response.result.step_errors.every(error => error === null));
+  await retryClient.push();
+  await retryClient.pull();
+  const retryObserver = await connectClient("retry-observer");
+  assert.deepEqual(await rows(retryObserver, "SELECT value FROM retry_counter"), [{ value: 1 }]);
+
+  await retryClient.close();
+  clients.splice(clients.indexOf(retryClient), 1);
+  const reopened = await connectClient("retry", { transform: incrementTransform });
+  await reopened.exec("UPDATE retry_counter SET value = value + 1 WHERE id = 1");
+  await reopened.push();
+  await reopened.pull();
+  await reopened.push();
+  await retryObserver.pull();
+  assert.deepEqual(await rows(retryObserver, "SELECT value FROM retry_counter"), [{ value: 2 }]);
+
+  await clientA.exec("CREATE TABLE ddl_rollback (id INTEGER PRIMARY KEY)");
+  await clientA.push();
+  const ddlFirst = await connectClient("ddl-first");
+  const ddlStale = await connectClient("ddl-stale");
+  await ddlFirst.exec("ALTER TABLE ddl_rollback ADD COLUMN extra TEXT");
+  await ddlFirst.push();
+  await ddlStale.exec("ALTER TABLE ddl_rollback ADD COLUMN extra TEXT");
+  await ddlStale.exec("INSERT INTO ddl_rollback VALUES (1, 'must-not-commit')");
+  await assert.rejects(() => ddlStale.push(), /Transaction rolled back/);
+  const ddlObserver = await connectClient("ddl-observer");
+  assert.deepEqual(await rows(ddlObserver, "SELECT COUNT(*) AS count FROM ddl_rollback"), [{ count: 0 }]);
 
   const resourcePath = `/control/v1/databases/${databaseId}`;
   assert.equal((await control("PATCH", resourcePath, { "display-name": "Renamed" })).status, 204);
@@ -186,7 +251,7 @@ try {
   assert.equal(closed["display-name"], "Renamed");
   const closedList = await (await control("GET", `${collection}?state=closed`)).json();
   assert(closedList.databases.some(database => database.id === databaseId));
-  const pullAfterClose = await fetch(`${url}/pull-updates`, {
+  const pullAfterClose = await timedFetch(`${url}/pull-updates`, {
     method: "POST",
     headers: { authorization: `Bearer ${managerToken}` },
     body: new Uint8Array()

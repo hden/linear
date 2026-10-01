@@ -7,6 +7,8 @@
    [linear.test :refer [run]]
    [linear.test-data.jwt :as jwt]
    [linear.test-data.postgres :as postgres]
+   [linear.test-data.slatedb :as slatedb-data]
+   [linear.test-data.sqlite :as sqlite-data]
    [linear.usecase.core :as core]
    [linear.usecase.database :as database])
   (:import
@@ -16,6 +18,13 @@
    (org.eclipse.jetty.server Server)))
 
 (def ^:private json-mapper json/keyword-keys-object-mapper)
+
+(def ^:private sync-metadata-request-body
+  (json/write-value-as-string
+    {:requests [{:type "batch"
+                 :batch {:steps [{:stmt {:sql "SELECT pull_gen, change_id FROM turso_sync_last_change_id WHERE client_id = ?"
+                                         :args [{:type "text" :value "client"}]
+                                         :want_rows true}}]}}]}))
 
 (defn- server-url [system]
   (let [^Server server (get-in system [:duct.server.http/jetty :server])
@@ -107,10 +116,14 @@
             owner-jwt (jwt/access-token fixture {:subject owner})
             reader-jwt (jwt/access-token fixture {:subject reader})
             datasource (:duct.database.sql/hikaricp system)
-            {:keys [database-id vault-id]}
-            (postgres/create-database! {:datasource datasource :actor owner})
-            metadata-body
-            "{\"requests\":[{\"type\":\"batch\",\"batch\":{\"steps\":[{\"stmt\":{\"sql\":\"SELECT pull_gen, change_id FROM turso_sync_last_change_id WHERE client_id = ?\",\"want_rows\":true}}]}}]}"
+            {:keys [database-id vault-id keychain]}
+            (postgres/create-database! {:datasource datasource :actor owner
+                                        :master-key (:linear.adapter.crypto.tempel/master-key system)})
+            _ (slatedb-data/store-root!
+                {:store (:linear.adapter.slatedb.store/store system)
+                 :database-id database-id :keychain keychain
+                 :pages (sqlite-data/pages {:image (sqlite-data/sqlite-image)})})
+            metadata-body sync-metadata-request-body
             metadata-path (str "/d/" database-id "/v2/pipeline")]
         (is (= 200 (:status (http-request client base-url
                               {:method "GET" :path "/health/ok"}))))
@@ -215,7 +228,7 @@
                                                   :headers (when body {"content-type" "application/json"})}))
             recovery (parse-json (call "GET" "/recovery-token" nil))
             metadata-path (str "/d/" database-id "/v2/pipeline")
-            metadata-body "{\"requests\":[{\"type\":\"batch\",\"batch\":{\"steps\":[{\"stmt\":{\"sql\":\"SELECT pull_gen, change_id FROM turso_sync_last_change_id WHERE client_id = ?\",\"want_rows\":true}}]}}]}"]
+            metadata-body sync-metadata-request-body]
         (is (= "active" (:state (parse-json (call "GET" "" nil)))))
         (is (= 204 (:status (call "DELETE" "" nil))))
         (is (= 204 (:status (call "DELETE" "" nil))))

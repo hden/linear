@@ -12,13 +12,10 @@
 (def ^:private last-change-id-query
   "SELECT pull_gen, change_id FROM turso_sync_last_change_id WHERE client_id = ?")
 
-(defn sync-metadata-statement? [{:keys [sql]}]
-  (re-find #"(?i)^(CREATE TABLE IF NOT EXISTS|INSERT INTO|UPDATE)\s+\"?turso_sync_last_change_id\"?(?:\s|\(|$)"
-           sql))
-
 (defn last-change-id-query? [batch]
   (let [statement (get-in batch [:steps 0 :stmt])]
-    (and (= 1 (count (:steps batch)))
+    (and (vector? (:steps batch))
+         (= 1 (count (:steps batch)))
          (= last-change-id-query (:sql statement))
          (= true (:want_rows statement)))))
 
@@ -45,7 +42,7 @@
                                                            (ok-step-result)))
                                               (vec (repeat step-count nil)))}))
 
-(defn last-change-id-response []
+(defn last-change-id-response [{:keys [generation change-id] :as progress}]
   (pipeline-response 200
     {:type "ok"
      :response
@@ -53,7 +50,10 @@
                              :decltype "INTEGER"}
                             {:name "change_id"
                              :decltype "INTEGER"}]
-                     :rows []
+                     :rows (if progress
+                             [[{:type "integer" :value (str generation)}
+                               {:type "integer" :value (str change-id)}]]
+                             [])
                      :affected_row_count 0
                      :last_insert_rowid nil
                      :replication_index nil
@@ -63,10 +63,14 @@
                    [nil])}))
 
 (defn single-batch [pipeline]
-  (let [batches (keep #(when (= "batch" (:type %)) (:batch %))
-                      (:requests pipeline))]
-    (if (= 1 (count batches))
-      (first batches)
+  (let [requests (:requests pipeline)
+        request (when (sequential? requests) (first requests))]
+    (if (and (nil? (:baton pipeline))
+             (sequential? requests)
+             (= 1 (count requests))
+             (= "batch" (:type request))
+             (map? (:batch request)))
+      (:batch request)
       (throw (ex-info "Push pipeline must contain exactly one batch"
                        {::anomaly/category ::anomaly/incorrect
                         :reason ::invalid-pipeline})))))
@@ -101,10 +105,13 @@
         error-index (if wire-indexes
                       (get wire-indexes domain-index domain-index)
                       domain-index)
-        step-results (assoc (vec (repeat step-count (ok-step-result)))
-                            error-index
-                            nil)
+        commit-index (dec step-count)
+        step-results (into (vec (repeat error-index (ok-step-result)))
+                           (repeat (- step-count error-index) nil))
         step-errors (assoc (vec (repeat step-count nil))
+                           commit-index
+                           {:message "Transaction rolled back"
+                            :code "TRANSACTION_ROLLED_BACK"}
                            error-index
                            {:message (error-message error)
                             :code "BATCH_STEP_ERROR"})]
@@ -122,4 +129,9 @@
                    500)]
     (pipeline-response status
                        {:type "error"
-                        :error {:message (error-message error)}})))
+                        :error {:message (error-message error)
+                                :code (case category
+                                        ::anomaly/incorrect "INVALID_REQUEST"
+                                        ::anomaly/forbidden "FORBIDDEN"
+                                        ::anomaly/conflict "CONFLICT"
+                                        "INTERNAL_ERROR")}})))

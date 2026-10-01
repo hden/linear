@@ -31,6 +31,45 @@
     (-as-of [_ revision-id] (get snapshots revision-id))
     (-changes-since [_ _ _] changed-page-ids)))
 
+(deftest sync-progress-controls-replay-within-the-head-snapshot
+  (doseq [[stored incoming outcome]
+          [[nil {:client-id "client" :generation 0 :change-id 1} :evaluate]
+           [{:client-id "client" :generation 0 :change-id 1}
+            {:client-id "client" :generation 0 :change-id 1} :skip]
+           [{:client-id "client" :generation 0 :change-id 2}
+            {:client-id "client" :generation 0 :change-id 1} :skip]
+           [{:client-id "client" :generation 0 :change-id 1}
+            {:client-id "client" :generation 0 :change-id 2} :evaluate]
+           [{:client-id "client" :generation 0 :change-id 100}
+            {:client-id "client" :generation 1 :change-id 1} :evaluate]
+           [{:client-id "client" :generation 1 :change-id 1}
+            {:client-id "client" :generation 0 :change-id 100} :conflict]]]
+    (let [head (snapshot "r-current" 1 (constantly {}))
+          evaluated (atom false)
+          reader (reify evaluator/SyncProgressReadable
+                   (-sync-progress [_ {:keys [snapshot client-id]}]
+                     (is (identical? head snapshot))
+                     (is (= "client" client-id))
+                     stored))
+          evaluator (reify evaluator/Evaluator
+                      (-evaluate [_ input]
+                        (is (identical? head (:snapshot input)))
+                        (reset! evaluated true)
+                        {:revision-id "r-next" :parent "r-current"
+                         :database-page-count 1 :pages {}}))
+          database (model/database attributes
+                     {::model/consistent-view (view head {} #{})
+                      ::model/evaluator evaluator
+                      ::model/sync-progress-reader reader})
+          result (try
+                   (model/evaluate database {:statements [] :sync-progress incoming})
+                   (catch clojure.lang.ExceptionInfo error error))]
+      (case outcome
+        :evaluate (is (= "r-next" (:revision-id result)))
+        :skip (is (nil? result))
+        :conflict (is (= ::anomaly/conflict (::anomaly/category (ex-data result)))))
+      (is (= (= outcome :evaluate) @evaluated)))))
+
 (deftest evaluate-uses-head-and-checks-the-revision-parent
   (doseq [parent ["r-current" "r-other"]]
     (let [evaluated (atom nil)

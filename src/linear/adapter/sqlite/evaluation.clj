@@ -69,15 +69,16 @@
                   state)))
 
 (defn commit
-  {:malli/schema [:-> ::evaluation :map]}
+  {:malli/schema [:-> ::evaluation [:maybe :map]]}
   [evaluation]
   (let [commits (:commits @(:state evaluation))]
     (case (count commits)
       1 (first commits)
-      0 (throw (ex-info "SQLite evaluation produced no commit"
-                        {::anomaly/category ::anomaly/incorrect
-                         :reason            ::missing-commit
-                         :wal-size          (sqlite/size (:wal-file evaluation))}))
+      0 (when (pos? (sqlite/size (:wal-file evaluation)))
+          (throw (ex-info "SQLite evaluation produced no commit"
+                   {::anomaly/category ::anomaly/incorrect
+                    :reason            ::missing-commit
+                    :wal-size          (sqlite/size (:wal-file evaluation))})))
       (throw (ex-info "SQLite evaluation produced multiple commits"
                       {::anomaly/category ::anomaly/incorrect
                        :reason            ::multiple-commits

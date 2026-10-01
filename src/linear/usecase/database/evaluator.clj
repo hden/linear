@@ -17,7 +17,27 @@
 
 (defmethod spec-for ::push-command [_]
   [:map
-   [:statements [:vector ::statement]]])
+   [:statements [:vector ::statement]]
+   [:sync-progress {:optional true} ::sync-progress]])
+
+(defmethod spec-for ::sync-progress [_]
+  [:map
+   [:client-id [:string {:min 1}]]
+   [:generation [:int {:min 0}]]
+   [:change-id [:int {:min 0}]]])
+
+(defprotocol SyncProgressReadable
+  (-sync-progress [reader arg-map]))
+
+(defmethod spec-for ::sync-progress-readable [_]
+  [:fn #(satisfies? SyncProgressReadable %)])
+
+(defn sync-progress
+  {:malli/schema [:-> ::sync-progress-readable
+                  [:map [:snapshot ::revisions/snapshot] [:client-id [:string {:min 1}]]]
+                  [:maybe ::sync-progress]]}
+  [reader arg-map]
+  (-sync-progress reader arg-map))
 
 (defprotocol Evaluator
   (-evaluate [evaluator arg-map]))
@@ -42,6 +62,6 @@
                   [:map
                    [:snapshot ::revisions/snapshot]
                    [:command ::push-command]]
-                  ::revisions/revision]}
+                  [:maybe ::revisions/revision]]}
   [evaluator arg-map]
   (-evaluate evaluator arg-map))

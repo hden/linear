@@ -16,6 +16,10 @@
   [{::keys [evaluator]}]
   evaluator)
 
+(defn sync-progress-reader
+  [{::keys [evaluator]}]
+  evaluator)
+
 (defn consistent-readable
   [{::keys [revision-store]}]
   revision-store)

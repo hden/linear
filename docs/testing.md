@@ -24,6 +24,10 @@ No external identity provider is required for this test.
 E2E creates resources through HTTP, bootstraps an empty DB, and verifies
 rename, closure, and recovery from a closed database.
 
+Turso E2E also verifies lost-response retries, reconnect, and DDL rollback.
+HTTP requests time out after 10 seconds; the client subprocess after 120 seconds.
+See [Turso compatibility](turso-compatibility.md) for the supported scope.
+
 Tests live beside the boundary they exercise. Handler tests assert transport
 wire behavior, adapter tests exercise native and storage boundaries, and
 use-case tests use `reify` capability implementations when a domain operation

@@ -113,6 +113,41 @@
   {:sql (get-in step [:stmt :sql])
    :parameters (mapv decode-wire-value (get-in step [:stmt :args]))})
 
+(def ^:private progress-upsert
+  "INSERT INTO turso_sync_last_change_id(client_id, pull_gen, change_id) VALUES (?, ?, ?) ON CONFLICT(client_id) DO UPDATE SET pull_gen=excluded.pull_gen, change_id=excluded.change_id")
+
+(def ^:private valid-progress-parameters?
+  (m/validator [:tuple [:string {:min 1}] [:int {:min 0}] [:int {:min 0}]]))
+
+(defn- metadata-client-id [batch]
+  (let [statement (get-in batch [:steps 0 :stmt])
+        args (:args statement)]
+    (when-not (and (vector? args)
+                   (= 1 (count args))
+                   (= "text" (:type (first args)))
+                   (valid-wire-value? (first args))
+                   (seq (:value (first args)))
+                   (nil? (:sql_id statement))
+                   (or (nil? (:named_args statement)) (= [] (:named_args statement)))
+                   (nil? (get-in batch [:steps 0 :condition])))
+      (invalid "Sync metadata query is invalid" ::invalid-sync-metadata-query))
+    (:value (first args))))
+
+(defn- command-progress [statements]
+  (let [indexes (keep-indexed (fn [index statement]
+                                (when (= progress-upsert (:sql statement))
+                                  index))
+                  statements)]
+    (when (seq indexes)
+      (when-not (and (= 1 (count indexes))
+                     (= (first indexes) (dec (count statements))))
+        (invalid "Sync progress must be the final statement" ::invalid-sync-progress))
+      (let [parameters (:parameters (peek statements))]
+        (when-not (valid-progress-parameters? parameters)
+          (invalid "Sync progress is invalid" ::invalid-sync-progress))
+        (let [[client-id generation change-id] parameters]
+          {:client-id client-id :generation generation :change-id change-id})))))
+
 (defn- validate-limits [body-size steps]
   (when-not (valid-request-size? body-size)
     (invalid "Push request is too large"
@@ -143,16 +178,11 @@
     (validate-batch batch)
     (let [last-index (dec (count steps))
           body-steps (subvec steps 1 last-index)
-          indexed-statements (->> (map-indexed (fn [index step]
-                                                 [(inc index) step])
-                                               body-steps)
-                               (remove (fn [[_ step]]
-                                         (hrana/sync-metadata-statement? (:stmt step))))
-                               vec)]
-      {:command {:statements (mapv (fn [[_ step]]
-                                     (statement-from-wire-step step))
-                                   indexed-statements)}
-       :wire-indexes (mapv first indexed-statements)})))
+          statements (mapv statement-from-wire-step body-steps)
+          progress (command-progress statements)]
+      {:command (cond-> {:statements statements}
+                  progress (assoc :sync-progress progress))
+       :wire-indexes (vec (range 1 last-index))})))
 
 (defn command [request]
   (:command (parse-command request)))
@@ -234,12 +264,11 @@
     (try
       (let [batch (hrana/single-batch body-params)]
         (if (hrana/last-change-id-query? batch)
-          (do
-            (database/check-permission context
-                                       {:actor (get-in request [:identity :sub])
-                                        :database-id (get-in request [:path-params :id])
-                                        :permission :pull})
-            (hrana/last-change-id-response))
+          (hrana/last-change-id-response
+            (database/sync-progress context
+              {:actor (get-in request [:identity :sub])
+               :database-id (get-in request [:path-params :id])
+               :client-id (metadata-client-id batch)}))
           (handle-batch context request batch)))
       (catch Exception error
         (hrana/error-response error)))))

@@ -84,6 +84,40 @@
 (defn- end-evaluation! [state]
   (signal-if-drained! (swap! state update :active dec)))
 
+(defn- with-snapshot [evaluator snapshot f]
+  (begin-evaluation! (:state evaluator))
+  (try
+    (let [path (str "/linear/" (ulid) ".db")
+          filesystem (evaluation/evaluation snapshot {:path path})
+          invocation (vfs/mount (:resources evaluator) {:path path :filesystem filesystem})]
+      (try
+        (let [database (call-sqlite invocation
+                                    {:operation :open :path path}
+                                    #(connection/open {:path path
+                                                       :vfs-name (:name (:resources evaluator))}))]
+          (try
+            (configure! invocation database)
+            (f invocation database filesystem)
+            (finally
+              (call-sqlite invocation {:operation :close} #(connection/close database)))))
+        (finally
+          (vfs/unmount invocation))))
+    (finally
+      (end-evaluation! (:state evaluator)))))
+
+(defn- read-progress [invocation database client-id]
+  (let [[table-count] (call-sqlite invocation {:operation :read-sync-progress}
+                        #(connection/query-integers database
+                           {:sql "SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = ?"
+                            :parameters ["turso_sync_last_change_id"]}))]
+    (when (pos? table-count)
+      (when-let [[generation change-id]
+                 (call-sqlite invocation {:operation :read-sync-progress}
+                              #(connection/query-integers database
+                                 {:sql "SELECT pull_gen, change_id FROM turso_sync_last_change_id WHERE client_id = ?"
+                                  :parameters [client-id]}))]
+        {:client-id client-id :generation generation :change-id change-id}))))
+
 (defrecord ^:private Evaluator [resources state shutdown-timeout-ms]
   evaluator/Initializer
   (-initial-revision [_]
@@ -98,30 +132,18 @@
   (-ok? [_]
     (and (= :ok (:liveness @state))
          (vfs/ok? resources)))
+  evaluator/SyncProgressReadable
+  (-sync-progress [this {:keys [snapshot client-id]}]
+    (with-snapshot this snapshot
+      (fn [invocation database _]
+        (read-progress invocation database client-id))))
   evaluator/Evaluator
-  (-evaluate [_ {:keys [snapshot command]}]
-    (begin-evaluation! state)
-    (try
-      (let [path       (str "/linear/" (ulid) ".db")
-            filesystem (evaluation/evaluation snapshot {:path path})
-            invocation (vfs/mount resources {:path path :filesystem filesystem})]
-        (try
-          (let [database (call-sqlite invocation
-                                      {:operation :open :path path}
-                                      #(connection/open {:path path
-                                                         :vfs-name (:name resources)}))]
-            (try
-              (configure! invocation database)
-              (execute-command! invocation database command)
-              (revision snapshot (evaluation/commit filesystem))
-              (finally
-                (call-sqlite invocation
-                             {:operation :close}
-                             #(connection/close database)))))
-          (finally
-            (vfs/unmount invocation))))
-      (finally
-        (end-evaluation! state)))))
+  (-evaluate [this {:keys [snapshot command]}]
+    (with-snapshot this snapshot
+      (fn [invocation database filesystem]
+        (execute-command! invocation database command)
+        (when-let [delta (evaluation/commit filesystem)]
+          (revision snapshot delta))))))
 
 (alter-meta! #'->Evaluator assoc :private true)
 (alter-meta! #'map->Evaluator assoc :private true)

@@ -72,13 +72,16 @@
 
 (deftest requires-exactly-one-commit
   (let [filesystem (evaluation/evaluation snapshot {:path "/linear/eval.db"})
-        missing    (try
-                     (evaluation/commit filesystem)
-                     nil
-                     (catch clojure.lang.ExceptionInfo exception
-                       exception))]
-    (is (= ::anomaly/incorrect (-> missing ex-data ::anomaly/category)))
-    (is (= ::evaluation/missing-commit (:reason (ex-data missing)))))
+        wal-file (open-file filesystem "/linear/eval.db-wal" :read-write :wal)]
+    (is (nil? (evaluation/commit filesystem)))
+    (sqlite/write wal-file 0 (wal-header))
+    (let [missing (try
+                    (evaluation/commit filesystem)
+                    nil
+                    (catch clojure.lang.ExceptionInfo exception
+                      exception))]
+      (is (= ::anomaly/incorrect (-> missing ex-data ::anomaly/category)))
+      (is (= ::evaluation/missing-commit (:reason (ex-data missing))))))
   (let [filesystem (evaluation/evaluation snapshot {:path "/linear/eval.db"})
         wal-file   (open-file filesystem "/linear/eval.db-wal" :read-write :wal)]
     (sqlite/write wal-file 0 (wal-header))

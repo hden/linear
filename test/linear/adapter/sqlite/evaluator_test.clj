@@ -50,6 +50,38 @@
         (< (System/nanoTime) deadline) (do (Thread/yield) (recur))
         :else false))))
 
+(deftest ^:integration reads-sync-progress-from-the-evaluated-snapshot
+  (let [base (sqlite-data/snapshot {:image (sqlite-data/sqlite-image)})
+        evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator {})]
+    (try
+      (is (nil? (evaluator/sync-progress evaluator {:snapshot base :client-id "client"})))
+      (let [revision (evaluator/evaluate evaluator
+                       {:snapshot base
+                        :command {:statements
+                                  [{:sql "CREATE TABLE turso_sync_last_change_id (client_id TEXT PRIMARY KEY, pull_gen INTEGER, change_id INTEGER)"
+                                    :parameters []}
+                                   {:sql "INSERT INTO turso_sync_last_change_id VALUES (?, ?, ?)"
+                                    :parameters ["client" 2 9223372036854775807]}]}})
+            next-snapshot (sqlite-data/map->Snapshot
+                            {:revision-id (:revision-id revision)
+                             :pages (merge (:pages base) (:pages revision))})]
+        (is (= {:client-id "client" :generation 2 :change-id 9223372036854775807}
+               (evaluator/sync-progress evaluator {:snapshot next-snapshot :client-id "client"})))
+        (is (nil? (evaluator/sync-progress evaluator {:snapshot next-snapshot :client-id "other"})))
+        (is (nil? (evaluator/sync-progress evaluator {:snapshot base :client-id "client"}))))
+      (finally
+        (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator)))))
+
+(deftest ^:integration a-successful-no-op-transaction-produces-no-revision
+  (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator {})]
+    (try
+      (is (nil? (evaluator/evaluate evaluator
+                  {:snapshot (sqlite-data/snapshot {:image (sqlite-data/sqlite-image)})
+                   :command {:statements [{:sql "CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY, value TEXT)"
+                                           :parameters []}]}})))
+      (finally
+        (integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator evaluator)))))
+
 (deftest ^:integration evaluates-sql-through-the-native-evaluator
   (Class/forName "org.sqlite.JDBC")
   (let [evaluator (integrant/init-key :linear.adapter.sqlite.evaluator/evaluator {})]

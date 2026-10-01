@@ -161,6 +161,7 @@
                             resolved-database#
                             {::model/consistent-view view#
                              ::model/evaluator (core/evaluator context#)
+                             ::model/sync-progress-reader (core/sync-progress-reader context#)
                              ::model/revision-writable (core/revision-writable context#)})]
              ~@body))))))
 
@@ -184,7 +185,8 @@
                                               :permission :push
                                               :read-only true}]
               [database (model/evaluate database command)])]
-        (model/publish-next! database revision)))
+        (when revision
+          (model/publish-next! database revision))))
     (catch clojure.lang.ExceptionInfo error
       (if (revision-conflict? error)
         (throw (ex-info "Database push conflict"
@@ -201,6 +203,14 @@
                                     :permission :pull
                                     :read-only true}]
     (model/pull database pull-options)))
+
+(defn sync-progress
+  [context {:keys [actor database-id] :as arg-map}]
+  (with-database [database context {:database-id database-id
+                                    :actor actor
+                                    :permission :pull
+                                    :read-only true}]
+    (model/sync-progress database arg-map)))
 
 (defn check-permission
   [context {:keys [actor database-id permission]}]

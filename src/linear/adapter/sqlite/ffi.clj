@@ -114,6 +114,9 @@
                               [pointer ::mem/int pointer ::mem/long pointer]
                               ::mem/int)
      :step                  (coffi/cfn "sqlite3_step" [pointer] ::mem/int)
+     :column-count          (coffi/cfn "sqlite3_column_count" [pointer] ::mem/int)
+     :column-type           (coffi/cfn "sqlite3_column_type" [pointer ::mem/int] ::mem/int)
+     :column-int64          (coffi/cfn "sqlite3_column_int64" [pointer ::mem/int] ::mem/long)
      :finalize              (coffi/cfn "sqlite3_finalize" [pointer] ::mem/int)
      :vfs-find              (coffi/cfn "sqlite3_vfs_find" [pointer] pointer)
      :vfs-register          (coffi/cfn "sqlite3_vfs_register" [pointer ::mem/int] ::mem/int)
@@ -195,6 +198,15 @@
 
 (defn step [statement]
   ((:step @api) statement))
+
+(defn column-count [statement]
+  ((:column-count @api) statement))
+
+(defn column-type [statement {:keys [index]}]
+  ((:column-type @api) statement index))
+
+(defn column-int64 [statement {:keys [index]}]
+  ((:column-int64 @api) statement index))
 
 (defn finalize [statement]
   ((:finalize @api) statement))

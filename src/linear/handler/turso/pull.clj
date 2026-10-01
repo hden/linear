@@ -22,22 +22,33 @@
     data))
 
 (defn- error-response [error]
-  {:status (case (::anomaly/category (ex-data error))
-             ::anomaly/incorrect 400
-             ::anomaly/not-found 400
-             ::anomaly/forbidden 403
-             ::anomaly/conflict 409
-             500)
+  {:status (if (contains? #{::protobuf/malformed-protobuf ::protobuf/malformed-page-selector}
+                 (:type (ex-data error)))
+             400
+             (case (::anomaly/category (ex-data error))
+               ::anomaly/incorrect 400
+               ::anomaly/not-found 400
+               ::anomaly/forbidden 403
+               ::anomaly/conflict 409
+               500))
    :headers {"content-type" "application/octet-stream"}
    :body (.getBytes ^String (.getMessage ^Exception error) "UTF-8")})
+
+(defn- validate-options [pull]
+  (when (or (not (zero? (get pull :encoding 0)))
+            (not (zero? (get pull :stream-kind 0)))
+            (not (zero? (get pull :long-poll-timeout-ms 0)))
+            (seq (:server-query-selector pull))
+            (seq (:client-pages pull)))
+    (throw (ex-info "Pull option is not supported"
+                    {::anomaly/category ::anomaly/incorrect
+                     :reason ::unsupported-pull-option}))))
 
 (defn handler [context]
   (fn [{:keys [body identity path-params]}]
     (try
-      ;; TODO(turso-sync): client-pages and server-query-selector are sent by
-      ;; the official client for partial-sync query strategy. The official
-      ;; CLI sync server does not implement these selectors yet.
       (let [pull (protobuf/decode-pull (body-bytes body))
+            _ (validate-options pull)
             result  (database/pull context {:server-revision (not-empty (:server-revision pull))
                                             :client-revision (not-empty (:client-revision pull))
                                             :page-ids (protobuf/decode-page-selector

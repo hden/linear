@@ -30,6 +30,9 @@ The development container provides both native libraries under
 
 ## Authentication
 
+For the supported SDK version, sync behavior, and retry guarantees, see
+[Turso sync compatibility](docs/turso-compatibility.md).
+
 Linear requires an Auth0 API access token for every vault and sync request.
 Tokens must be signed with RS256 and contain the configured issuer, API
 audience, expiration, and a nonempty `sub`. The subject identifies the actor.
