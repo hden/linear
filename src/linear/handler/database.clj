@@ -1,20 +1,11 @@
 (ns linear.handler.database
   (:require
    [cognitect.anomalies :as anomaly]
+   [linear.handler.core :as core]
    [linear.spec :as spec]
    [linear.usecase.database :as database]
    [linear.usecase.database.model :as model]
    [linear.usecase.database.revisions :as revisions]))
-
-(defn- error-response [error]
-  (let [category (::anomaly/category (ex-data error))]
-    {:status (case category
-               ::anomaly/incorrect 400
-               ::anomaly/forbidden 403
-               ::anomaly/not-found 404
-               ::anomaly/conflict 409
-               500)
-     :body {:error (if (= category ::anomaly/forbidden) "Forbidden" (.getMessage ^Exception error))}}))
 
 (defn- arguments [request]
   {:actor (get-in request [:identity :sub]) :database-id (get-in request [:path-params :id])})
@@ -40,13 +31,13 @@
                                            :vault-id (:id path-params)
                                            :idempotency-key (get headers "idempotency-key")))]
         {:status 201 :headers {"location" (str "/control/v1/databases/" id)} :body {:id id}})
-      (catch Exception error (error-response error)))))
+      (catch Exception error (core/error-response (core/anomaly error))))))
 
 (defn get-by-id [context]
   (fn [request]
     (try
       {:status 200 :body (resource (database/get-by-id context (arguments request)))}
-      (catch Exception error (error-response error)))))
+      (catch Exception error (core/error-response (core/anomaly error))))))
 
 (defn list-by-vault [context]
   (fn [{:keys [query-params path-params identity]}]
@@ -57,7 +48,7 @@
         (let [databases (database/list-by-vault context
                           {:actor (:sub identity) :vault-id (:id path-params) :state state})]
           {:status 200 :body {:databases (mapv resource databases)}}))
-      (catch Exception error (error-response error)))))
+      (catch Exception error (core/error-response (core/anomaly error))))))
 
 (defn update-attributes [context]
   (fn [{:keys [body-params] :as request}]
@@ -65,11 +56,11 @@
       (require-input [:map {:closed true} [:display-name [:string {:min 1}]]] body-params)
       (database/update-attributes! context (merge (arguments request) body-params))
       {:status 204}
-      (catch Exception error (error-response error)))))
+      (catch Exception error (core/error-response (core/anomaly error))))))
 
 (defn close [context]
   (fn [request]
     (try
       (database/close! context (arguments request))
       {:status 204}
-      (catch Exception error (error-response error)))))
+      (catch Exception error (core/error-response (core/anomaly error))))))

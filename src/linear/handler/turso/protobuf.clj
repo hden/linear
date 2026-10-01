@@ -1,5 +1,6 @@
 (ns linear.handler.turso.protobuf
   (:require
+   [cognitect.anomalies :as anomaly]
    [linear.spec :as spec]
    [linear.usecase.database.revisions :as revisions]
    [ring.core.protocols :as ring])
@@ -9,7 +10,9 @@
    (org.roaringbitmap RoaringBitmap)))
 
 (defn- malformed [message]
-  (throw (ex-info message {:type ::malformed-protobuf})))
+  (throw (ex-info message {::anomaly/category ::anomaly/incorrect
+                           ::anomaly/message message
+                           :reason ::malformed-protobuf})))
 
 (defn- byte-at [^bytes data index]
   (bit-and (aget data index) 0xff))
@@ -118,7 +121,9 @@
             page-ids)))
       (catch Exception error
         (throw (ex-info "Pull page selector is malformed"
-                        {:type ::malformed-page-selector}
+                        {::anomaly/category ::anomaly/incorrect
+                         ::anomaly/message "Pull page selector is malformed"
+                         :reason ::malformed-page-selector}
                         error))))))
 
 (defn- write-varint! [^OutputStream output value]
@@ -162,7 +167,9 @@
   (if (spec/valid? ::revisions/page-id page-id)
     (dec page-id)
     (throw (ex-info "Invalid domain page ID"
-                    {:type ::invalid-page-id
+                    {::anomaly/category ::anomaly/fault
+                     ::anomaly/message "Invalid domain page ID"
+                     :reason ::invalid-page-id
                      :page-id page-id}))))
 
 (defn- encode-page [{:keys [page-id page]}]

@@ -1,23 +1,14 @@
 (ns linear.handler.turso.hrana-test
   (:require
    [clojure.test :refer [deftest is]]
+   [cognitect.anomalies :as anomaly]
+   [linear.handler.core :as core]
    [linear.handler.turso.hrana :as hrana]))
-
-(deftest extracts-one-batch-from-a-pipeline
-  (let [batch {:steps []}]
-    (is (= batch
-           (hrana/single-batch {:requests [{:type "batch"
-                                            :batch batch}]})))))
-
-(deftest pipeline-rejects-extra-requests-and-non-null-batons
-  (doseq [pipeline [{:requests [{:type "execute"} {:type "batch" :batch {:steps []}}]}
-                    {:baton "old-stream" :requests [{:type "batch" :batch {:steps []}}]}]]
-    (is (thrown? clojure.lang.ExceptionInfo (hrana/single-batch pipeline)))))
 
 (deftest rolled-back-batch-reports-the-failed-commit-and-unexecuted-steps
   (let [response (hrana/batch-error-response
                    {:steps [{} {} {} {} {}]}
-                   {:error (ex-info "duplicate column name: x" {:statement-index 1})
+                   {:anomaly (core/anomaly (ex-info "duplicate column name: x" {:statement-index 1}))
                     :wire-indexes [1 2 3]})
         result (get-in response [:body :results 0 :response :result])]
     (is (= [true true false false false] (mapv some? (:step_results result))))
@@ -39,11 +30,6 @@
            (get-in response [:body :results 0 :response
                              :result :step_errors])))))
 
-(deftest recognizes-the-sync-metadata-query
-  (is (hrana/last-change-id-query?
-        {:steps [{:stmt {:sql "SELECT pull_gen, change_id FROM turso_sync_last_change_id WHERE client_id = ?"
-                         :want_rows true}}]})))
-
 (deftest sync-metadata-response-reports-an-unknown-client-as-an-empty-result
   (is (empty?
         (get-in (hrana/last-change-id-response nil)
@@ -58,25 +44,25 @@
 (deftest malformed-pipeline-response-is-an-http-client-error
   (is (= 400
          (:status (hrana/error-response
-                    (ex-info "invalid" {:cognitect.anomalies/category
-                                        :cognitect.anomalies/incorrect}))))))
+                    (core/anomaly (ex-info "invalid" {:cognitect.anomalies/category
+                                                      :cognitect.anomalies/incorrect})))))))
 
 (deftest error-response-preserves-sqlite-diagnostics
   (let [error (ex-info "SQLite execution failed"
                        {}
                        (ex-info "SQLite statement failed"
-                                {:sqlite-message "UNIQUE constraint failed: u.y"}))]
+                                {::anomaly/message "UNIQUE constraint failed: u.y"}))]
     (is (= "UNIQUE constraint failed: u.y"
-           (get-in (hrana/error-response error)
+           (get-in (hrana/error-response (core/anomaly error))
                    [:body :results 0 :error :message])))))
 
 (deftest batch-error-response-uses-step-errors
   (let [error (ex-info "SQLite execution failed"
                        {}
                        (ex-info "SQLite statement failed"
-                                {:sqlite-message "UNIQUE constraint failed: u.y"
+                                {::anomaly/message "UNIQUE constraint failed: u.y"
                                  :statement-index 2}))
-        response (hrana/batch-error-response {:steps [{} {} {}]} {:error error})]
+        response (hrana/batch-error-response {:steps [{} {} {}]} {:anomaly (core/anomaly error)})]
     (is (= 200 (:status response)))
     (is (= [true true false]
            (mapv some?
@@ -92,7 +78,7 @@
                        {}
                        (ex-info "SQLite statement failed"
                                 {:statement-index 0}))
-        response (hrana/batch-error-response {:steps [{} {} {}]} {:error error :wire-indexes [2]})]
+        response (hrana/batch-error-response {:steps [{} {} {}]} {:anomaly (core/anomaly error) :wire-indexes [2]})]
     (is (= [true true false]
            (mapv some?
                  (get-in response [:body :results 0 :response :result :step_results]))))
@@ -101,3 +87,17 @@
             {:message "SQLite execution failed"
              :code "BATCH_STEP_ERROR"}]
            (get-in response [:body :results 0 :response :result :step_errors])))))
+
+(deftest pipeline-anomalies-preserve-protocol-status-and-codes
+  (doseq [[category status code]
+          [[::anomaly/incorrect 400 "INVALID_REQUEST"]
+           [::anomaly/forbidden 403 "FORBIDDEN"]
+           [::anomaly/conflict 409 "CONFLICT"]
+           [::anomaly/not-found 500 "INTERNAL_ERROR"]
+           [::anomaly/unavailable 500 "INTERNAL_ERROR"]
+           [::anomaly/fault 500 "INTERNAL_ERROR"]]]
+    (let [response (hrana/error-response {::anomaly/category category
+                                          ::anomaly/message "protocol detail"})]
+      (is (= status (:status response)))
+      (is (= {:message "protocol detail" :code code}
+             (get-in response [:body :results 0 :error]))))))

@@ -45,7 +45,7 @@
         (is (= ::connection/statement-failed (:reason data)))
         (is (pos-int? (:code data)))
         (is (pos-int? (:extended-code data)))
-        (is (string/includes? (:sqlite-message data) "syntax error"))))))
+        (is (string/includes? (or (::anomaly/message data) "") "syntax error"))))))
 
 (deftest ^:integration execute-rejects-a-closed-connection
   (call-with-native-connection
@@ -69,7 +69,7 @@
                       nil
                       (catch clojure.lang.ExceptionInfo error error))]
         (is (= ::connection/statement-failed (:reason (ex-data failure))))
-        (is (string/includes? (:sqlite-message (ex-data failure)) "UNIQUE constraint failed"))
+        (is (string/includes? (or (::anomaly/message (ex-data failure)) "") "UNIQUE constraint failed"))
         (is (= [1] (connection/query-integers database {:sql "SELECT COUNT(*) FROM unique_ids" :parameters []})))))))
 
 (deftest ^:integration close-is-idempotent

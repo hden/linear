@@ -1,6 +1,7 @@
 (ns linear.handler.turso.protobuf-test
   (:require
    [clojure.test :refer [deftest is testing]]
+   [cognitect.anomalies :as anomaly]
    [linear.handler.turso.protobuf :as protobuf]
    [linear.test :as test]
    [ring.core.protocols :as ring])
@@ -108,7 +109,7 @@
                                 0x80 0x80 0x80 0x80 0x80)]]]
     (testing description
       (is (= ::protobuf/malformed-protobuf
-             (:type (test/catch-ex-data #(protobuf/decode-pull data))))))))
+             (:reason (test/catch-ex-data #(protobuf/decode-pull data))))))))
 
 (deftest protobuf-parser-rejects-supported-fields-with-wrong-wire-types
   (doseq [[field data]
@@ -122,7 +123,7 @@
            [8 (byte-array-from 0x42 0x00)]]]
     (testing (str "field " field)
       (is (= ::protobuf/malformed-protobuf
-             (:type (test/catch-ex-data #(protobuf/decode-pull data))))))))
+             (:reason (test/catch-ex-data #(protobuf/decode-pull data))))))))
 
 (deftest decodes-the-official-zero-based-roaring-page-selector
   (let [bitmap (doto (RoaringBitmap.)
@@ -139,9 +140,9 @@
 
 (deftest malformed-page-selectors-are-rejected
   (is (= ::protobuf/malformed-page-selector
-         (:type (test/catch-ex-data
-                  #(protobuf/decode-page-selector
-                     (byte-array-from 1 2 3)))))))
+         (:reason (test/catch-ex-data
+                    #(protobuf/decode-page-selector
+                       (byte-array-from 1 2 3)))))))
 
 (deftest pull-stream-rejects-a-non-positive-domain-page-id
   (let [body (protobuf/pull-stream
@@ -150,8 +151,8 @@
                 :pages {0 (byte-array-from 1 2)}})
         output (ByteArrayOutputStream.)]
     (is (= ::protobuf/invalid-page-id
-           (:type (test/catch-ex-data
-                    #(ring/write-body-to-stream body nil output)))))))
+           (:reason (test/catch-ex-data
+                      #(ring/write-body-to-stream body nil output)))))))
 
 (deftest pull-stream-orders-pages-by-domain-page-id
   (let [body (protobuf/pull-stream
@@ -171,3 +172,10 @@
                   0x05 0x08 0x00 0x12 0x01 0x01
                   0x05 0x08 0x01 0x12 0x01 0x02))
           (seq (.toByteArray output))))))
+
+(deftest malformed-protobuf-uses-the-incorrect-anomaly-category
+  (doseq [decode [#(protobuf/decode-pull (byte-array [0x00]))
+                  #(protobuf/decode-page-selector (byte-array [1 2 3]))]]
+    (let [data (test/catch-ex-data decode)]
+      (is (= ::anomaly/incorrect (::anomaly/category data)))
+      (is (string? (::anomaly/message data))))))

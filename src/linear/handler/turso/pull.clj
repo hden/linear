@@ -1,6 +1,7 @@
 (ns linear.handler.turso.pull
   (:require
    [cognitect.anomalies :as anomaly]
+   [linear.handler.core :as core]
    [linear.handler.turso.protobuf :as protobuf]
    [linear.usecase.database :as database])
   (:import
@@ -22,17 +23,10 @@
     data))
 
 (defn- error-response [error]
-  {:status (if (contains? #{::protobuf/malformed-protobuf ::protobuf/malformed-page-selector}
-                 (:type (ex-data error)))
-             400
-             (case (::anomaly/category (ex-data error))
-               ::anomaly/incorrect 400
-               ::anomaly/not-found 400
-               ::anomaly/forbidden 403
-               ::anomaly/conflict 409
-               500))
-   :headers {"content-type" "application/octet-stream"}
-   :body (.getBytes ^String (.getMessage ^Exception error) "UTF-8")})
+  (let [{::anomaly/keys [category message] :as anomaly} (core/anomaly error)]
+    {:status (if (= ::anomaly/not-found category) 400 (core/http-status anomaly))
+     :headers {"content-type" "application/octet-stream"}
+     :body (.getBytes ^String message "UTF-8")}))
 
 (defn- validate-options [pull]
   (when (or (not (zero? (get pull :encoding 0)))

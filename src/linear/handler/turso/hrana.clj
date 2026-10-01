@@ -1,6 +1,7 @@
 (ns linear.handler.turso.hrana
   (:require
-   [cognitect.anomalies :as anomaly]))
+   [cognitect.anomalies :as anomaly]
+   [linear.handler.core :as core]))
 
 (defn- pipeline-response [status result]
   {:status status
@@ -8,16 +9,6 @@
    :body {:baton nil
           :base_url nil
           :results [result]}})
-
-(def ^:private last-change-id-query
-  "SELECT pull_gen, change_id FROM turso_sync_last_change_id WHERE client_id = ?")
-
-(defn last-change-id-query? [batch]
-  (let [statement (get-in batch [:steps 0 :stmt])]
-    (and (vector? (:steps batch))
-         (= 1 (count (:steps batch)))
-         (= last-change-id-query (:sql statement))
-         (= true (:want_rows statement)))))
 
 (defn- ok-step-result []
   {:cols []
@@ -62,46 +53,10 @@
                      :query_duration_ms 0.0}]
                    [nil])}))
 
-(defn single-batch [pipeline]
-  (let [requests (:requests pipeline)
-        request (when (sequential? requests) (first requests))]
-    (if (and (nil? (:baton pipeline))
-             (sequential? requests)
-             (= 1 (count requests))
-             (= "batch" (:type request))
-             (map? (:batch request)))
-      (:batch request)
-      (throw (ex-info "Push pipeline must contain exactly one batch"
-                       {::anomaly/category ::anomaly/incorrect
-                        :reason ::invalid-pipeline})))))
-
-(defn- error-message [error]
-  (loop [current error]
-    (if-let [message (:sqlite-message (ex-data current))]
-      message
-      (if-let [cause (.getCause ^Exception current)]
-        (recur cause)
-        (.getMessage ^Exception error)))))
-
-(defn- error-data [error]
-  (loop [current error]
-    (if-let [data (ex-data current)]
-      (if (contains? data :statement-index)
-        data
-        (if-let [cause (.getCause ^Exception current)]
-          (recur cause)
-          data))
-      (if-let [cause (.getCause ^Exception current)]
-        (recur cause)
-        {}))))
-
-(defn statement-error? [error]
-  (contains? (error-data error) :statement-index))
-
 (defn batch-error-response
-  [batch {:keys [error wire-indexes]}]
+  [{:as batch} {:keys [anomaly wire-indexes]}]
   (let [step-count  (count (:steps batch))
-        domain-index (or (:statement-index (error-data error)) 0)
+        domain-index (or (:statement-index anomaly) 0)
         error-index (if wire-indexes
                       (get wire-indexes domain-index domain-index)
                       domain-index)
@@ -113,25 +68,19 @@
                            {:message "Transaction rolled back"
                             :code "TRANSACTION_ROLLED_BACK"}
                            error-index
-                           {:message (error-message error)
+                           {:message (::anomaly/message anomaly)
                             :code "BATCH_STEP_ERROR"})]
     (pipeline-response 200
                        {:type "ok"
                         :response (batch-result step-results
                                                 step-errors)})))
 
-(defn error-response [error]
-  (let [category (::anomaly/category (ex-data error))
-        status   (case category
-                   ::anomaly/incorrect 400
-                   ::anomaly/forbidden 403
-                   ::anomaly/conflict 409
-                   500)]
-    (pipeline-response status
-                       {:type "error"
-                        :error {:message (error-message error)
-                                :code (case category
-                                        ::anomaly/incorrect "INVALID_REQUEST"
-                                        ::anomaly/forbidden "FORBIDDEN"
-                                        ::anomaly/conflict "CONFLICT"
-                                        "INTERNAL_ERROR")}})))
+(defn error-response [{::anomaly/keys [category message] :as arg-map}]
+  (pipeline-response (if (= ::anomaly/not-found category) 500 (core/http-status arg-map))
+                     {:type "error"
+                      :error {:message message
+                              :code (case category
+                                      ::anomaly/incorrect "INVALID_REQUEST"
+                                      ::anomaly/forbidden "FORBIDDEN"
+                                      ::anomaly/conflict "CONFLICT"
+                                      "INTERNAL_ERROR")}}))

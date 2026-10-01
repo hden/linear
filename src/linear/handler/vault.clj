@@ -1,6 +1,7 @@
 (ns linear.handler.vault
   (:require
    [cognitect.anomalies :as anomaly]
+   [linear.handler.core :as core]
    [linear.usecase.vault :as vault]))
 
 (defn create [context]
@@ -19,23 +20,7 @@
           {:status 201
            :body {:id (first ids)}}))
       (catch Exception error
-        {:status (case (::anomaly/category (ex-data error))
-                   ::anomaly/incorrect 400
-                   ::anomaly/conflict 409
-                   500)
-         :body {:error (.getMessage error)}}))))
-
-(defn- error-response [error]
-  (let [category (::anomaly/category (ex-data error))]
-    {:status (case category
-               ::anomaly/incorrect 400
-               ::anomaly/forbidden 403
-               ::anomaly/not-found 404
-               ::anomaly/conflict 409
-               500)
-     :body {:error (if (= ::anomaly/forbidden category)
-                     "Forbidden"
-                     (.getMessage ^Exception error))}}))
+        (core/error-response (core/anomaly error))))))
 
 (defn- arguments [request]
   {:actor (get-in request [:identity :sub])
@@ -46,7 +31,7 @@
     (try
       (let [{:keys [id state]} (vault/get-state context (arguments request))]
         {:status 200 :body {:id id :state (name state)}})
-      (catch Exception error (error-response error)))))
+      (catch Exception error (core/error-response (core/anomaly error))))))
 
 (defn recovery-token [context]
   (fn [request]
@@ -54,14 +39,14 @@
       {:status 200
        :headers {"cache-control" "no-store"}
        :body {:token (vault/recovery-token context (arguments request))}}
-      (catch Exception error (error-response error)))))
+      (catch Exception error (core/error-response (core/anomaly error))))))
 
 (defn delete [context]
   (fn [request]
     (try
       (vault/delete! context (arguments request))
       {:status 204}
-      (catch Exception error (error-response error)))))
+      (catch Exception error (core/error-response (core/anomaly error))))))
 
 (defn restore [context]
   (fn [{:keys [body-params] :as request}]
@@ -73,4 +58,4 @@
                         {::anomaly/category ::anomaly/incorrect})))
       (vault/restore! context (assoc (arguments request) :token (:token body-params)))
       {:status 204}
-      (catch Exception error (error-response error)))))
+      (catch Exception error (core/error-response (core/anomaly error))))))

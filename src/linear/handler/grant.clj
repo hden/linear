@@ -1,22 +1,13 @@
 (ns linear.handler.grant
   (:require
    [cognitect.anomalies :as anomaly]
+   [linear.handler.core :as core]
    [linear.usecase.grant :as grant]))
 
 (def ^:private permissions
   {"pull" :pull
    "push" :push
    "manage" :manage})
-
-(defn- error-response [error]
-  (let [category (::anomaly/category (ex-data error))]
-    {:status (case category
-               ::anomaly/incorrect 400
-               ::anomaly/forbidden 403
-               500)
-     :body {:error (if (= ::anomaly/forbidden category)
-                     "Forbidden"
-                     (.getMessage ^Exception error))}}))
 
 (defn- actor [request]
   (get-in request [:identity :sub]))
@@ -30,7 +21,7 @@
         {:status 200
          :body {:grants (mapv #(update % :permission name) grants)}})
       (catch Exception error
-        (error-response error)))))
+        (core/error-response (core/anomaly error))))))
 
 (defn set-grant [context]
   (fn [{:keys [body-params path-params] :as request}]
@@ -49,7 +40,7 @@
                            :permission permission})
         {:status 204})
       (catch Exception error
-        (error-response error)))))
+        (core/error-response (core/anomaly error))))))
 
 (defn revoke-grant [context]
   (fn [{:keys [path-params] :as request}]
@@ -60,4 +51,4 @@
                             :subject (:subject path-params)})
       {:status 204}
       (catch Exception error
-        (error-response error)))))
+        (core/error-response (core/anomaly error))))))

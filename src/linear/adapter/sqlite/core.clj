@@ -4,9 +4,12 @@
 
 (defn fault
   ([message data]
-   (throw (ex-info message
-                   (assoc data ::anomaly/category ::anomaly/fault))))
+   (fault message data nil))
   ([message data cause]
    (throw (ex-info message
-                   (assoc data ::anomaly/category ::anomaly/fault)
+                   (assoc data
+                          ::anomaly/category ::anomaly/fault
+                          ::anomaly/message  (or (::anomaly/message data)
+                                                 (::anomaly/message (ex-data cause))
+                                                 message))
                    cause))))

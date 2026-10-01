@@ -191,6 +191,16 @@ validation is reserved for unavoidable external input boundaries, including
 transport payloads. Code must not duplicate instrumentation with runtime
 validation inside controlled calls.
 
+Errors propagate as exceptions. `linear.handler.core` normalizes their data into
+`cognitect.anomalies/category` and `cognitect.anomalies/message`; qualified
+`:reason` values and statement indexes provide operation-specific context.
+Normalization reads exception causes, preferring the outermost value for each
+field and falling back to `fault` and the outer exception message. The same
+namespace provides the management API's HTTP policy. Turso request decoding
+lives in
+`linear.handler.turso.request`; its response encoders retain protocol-specific
+status codes and wire formats.
+
 ## Enforcement
 
 Run `bb architecture` to discover `src` with tools.namespace, check its

@@ -41,9 +41,9 @@
                  authorizer-arena))
 
 (defn- sqlite-diagnostics [database code]
-  {:code           code
-   :extended-code  (ffi/extended-errcode database)
-   :sqlite-message (ffi/errmsg database)})
+  {:code             code
+   :extended-code    (ffi/extended-errcode database)
+   ::anomaly/message (ffi/errmsg database)})
 
 (defrecord Connection [handle closed?]
   AutoCloseable
