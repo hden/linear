@@ -6,7 +6,9 @@
    [linear.adapter.postgres]
    [linear.test :refer [run]]
    [linear.test-data.jwt :as jwt]
-   [linear.test-data.postgres :as postgres])
+   [linear.test-data.postgres :as postgres]
+   [linear.usecase.core :as core]
+   [linear.usecase.database :as database])
   (:import
    (java.net URI URLEncoder)
    (java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers HttpResponse$BodyHandlers)
@@ -41,6 +43,57 @@
 
 (defn- encode-path-segment [value]
   (URLEncoder/encode value StandardCharsets/UTF_8))
+
+(deftest ^:integration database-resources-support-lifecycle-and-closed-source-recovery
+  (with-open [fixture (jwt/fixture)]
+    (with-system [system (run {:keys [:duct.server.http/jetty :duct.migrator/ragtime]
+                               :vars (assoc (jwt/oidc-vars fixture) 'port 0)})]
+      (let [client (HttpClient/newHttpClient)
+            base (server-url system)
+            actor (str "database-manager-" (random-uuid))
+            token (jwt/access-token fixture {:subject actor})
+            send (fn [method path body key]
+                   (http-request client base
+                     {:method method :path path :token token
+                      :body (when body (json/write-value-as-string body))
+                      :headers (cond-> {"content-type" "application/json"}
+                                 key (assoc "idempotency-key" key))}))
+            vault-id (:id (parse-json (send "POST" "/control/v1/vaults" nil (str (random-uuid)))))
+            collection (str "/control/v1/vaults/" vault-id "/databases")
+            key (str (random-uuid))
+            created (send "POST" collection {:display-name "Primary"} key)]
+        (is (= 201 (:status created)))
+        (when (= 201 (:status created))
+          (let [id (:id (parse-json created))
+                path (str "/control/v1/databases/" id)
+                ctx {::core/database (:duct.database.sql/hikaricp system)
+                     ::core/master-key (:linear.adapter.crypto.tempel/master-key system)
+                     ::core/revision-store (:linear.adapter.slatedb.store/store system)
+                     ::core/evaluator (:linear.adapter.sqlite.evaluator/evaluator system)}
+                root (database/pull ctx {:actor actor :database-id id})]
+            (is (pos? (:database-page-count root)))
+            (is (= {:id id :vault-id vault-id :display-name "Primary" :state "active"}
+                   (parse-json (send "GET" path nil nil))))
+            (is (= id (:id (parse-json (send "POST" collection {:display-name "Ignored"} key)))))
+            (is (= 204 (:status (send "PATCH" path {:display-name "Renamed"} nil))))
+            (is (= (:server-revision root) (:server-revision (database/pull ctx {:actor actor :database-id id}))))
+            (database/push! ctx {:actor actor :database-id id
+                                 :command {:statements [{:sql "CREATE TABLE example (id INTEGER PRIMARY KEY)" :parameters []}]}})
+            (doseq [_ (range 2)] (is (= 204 (:status (send "DELETE" path nil nil)))))
+            (is (= {:id id :vault-id vault-id :display-name "Renamed" :state "closed"}
+                   (parse-json (send "GET" path nil nil))))
+            (is (empty? (:databases (parse-json (send "GET" collection nil nil)))))
+            (is (= [id] (mapv :id (:databases (parse-json (send "GET" (str collection "?state=closed") nil nil))))))
+            (is (= 409 (:status (send "PATCH" path {:display-name "No"} nil))))
+            (is (thrown? clojure.lang.ExceptionInfo (database/pull ctx {:actor actor :database-id id})))
+            (is (= id (:id (parse-json (send "POST" collection {:display-name "Ignored"} key)))))
+            (doseq [source [{:database-id id} {:database-id id :revision-id (:server-revision root)}]]
+              (let [restored (send "POST" collection {:display-name "Recovered" :source source} (str (random-uuid)))
+                    restored-id (:id (parse-json restored))]
+                (is (= 201 (:status restored)))
+                (is (not= id restored-id))
+                (is (pos? (:database-page-count (database/pull ctx {:actor actor :database-id restored-id}))))))
+            (is (= "closed" (:state (parse-json (send "GET" path nil nil)))))))))))
 
 (deftest ^:integration authenticated-http-routes-enforce-vault-grants
   (with-open [fixture (jwt/fixture)]

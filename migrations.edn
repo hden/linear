@@ -74,6 +74,8 @@
           )"
          "CREATE INDEX database_tombstones_by_transaction
             ON database_tombstones (created_by)"
+         "CREATE INDEX database_tombstones_by_database
+            ON database_tombstones (database_id)"
 
          "COMMENT ON TABLE transactions IS 'One row per mutation, and one per database transaction: the two are the same thing, as in Datomic. Every immutable row names the transaction that created it, which is also how what happened is known — a revision naming it was a push, a database and its attributes a creation, a tombstone a closure. The kind is therefore not a column: it would be a classification of ours stored next to the facts, drifting every time an operation is added or renamed.'"
          "COMMENT ON COLUMN transactions.actor IS 'Who asked — a person or a service account, and toro does not ask which. Recorded so that why this row exists can be traced, and never consulted to decide whether a request may proceed.'"

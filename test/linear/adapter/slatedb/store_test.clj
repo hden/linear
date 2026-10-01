@@ -47,6 +47,48 @@
       (finally
         (ffi/await (ffi/rollback-transaction transaction))))))
 
+(deftest ^:integration initialization-encrypts-root-and-refuses-to-replace-an-existing-head
+  (let [store (connection/open {:object-store-url "memory:///" :max-open-databases 1})
+        keychain (crypto/keychain (tempel/keychain))
+        database (database-record keychain)
+        root {:revision-id "r-created" :parent nil :database-page-count 1 :pages {1 (byte-array [1 2 3])}}]
+    (try
+      (is (= root (revisions/initialize! store {:database database :revision root})))
+      (let [[head-value page-value] (read-records store [(key/head) (key/page 1)])]
+        (is (= {:revision-id "r-created"} (codec/decode-head head-value)))
+        (is (not (Arrays/equals ^bytes (get-in root [:pages 1]) ^bytes page-value)))
+        (is (Arrays/equals ^bytes (get-in root [:pages 1])
+              ^bytes (codec/decode-page keychain {:record-key (key/page 1) :value page-value}))))
+      (let [error (try
+                    (revisions/initialize! store {:database database :revision (assoc root :revision-id "r-overwrite")})
+                    nil
+                    (catch clojure.lang.ExceptionInfo error error))]
+        (is (= ::revisions/revision-conflict (:reason (ex-data error)))))
+      (let [[head-value overwritten] (read-records store [(key/head) (key/revision "r-overwrite")])]
+        (is (= {:revision-id "r-created"} (codec/decode-head head-value)))
+        (is (nil? overwritten)))
+      (finally (connection/close store)))))
+
+(deftest ^:integration initialization-refuses-a-stored-head-without-a-revision-id
+  (let [store (connection/open {:object-store-url "memory:///" :max-open-databases 1})
+        keychain (crypto/keychain (tempel/keychain))]
+    (try
+      (with-open [database (connection/database store {:database-id "d-1"})
+                  transaction (connection/writable-transaction database)]
+        (ffi/await (ffi/write-values transaction [[(key/head) (codec/encode-head {})]]))
+        (ffi/await (ffi/commit-transaction transaction)))
+      (let [error (try
+                    (revisions/initialize! store
+                      {:database (database-record keychain)
+                       :revision {:revision-id "r-created" :parent nil :database-page-count 0 :pages {}}})
+                    nil
+                    (catch clojure.lang.ExceptionInfo error error))]
+        (is (= ::revisions/revision-conflict (:reason (ex-data error)))))
+      (let [[head-value root-value] (read-records store [(key/head) (key/revision "r-created")])]
+        (is (= {} (codec/decode-head head-value)))
+        (is (nil? root-value)))
+      (finally (connection/close store)))))
+
 (deftest ^:integration failed-consistent-view-acquisition-returns-the-database-lease
   (let [store    (connection/open {:object-store-url   "memory:///"
                                    :max-open-databases 1})

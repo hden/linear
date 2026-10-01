@@ -65,6 +65,11 @@
     ["/d/:id/pull-updates" {:post :linear.handler.turso.pull/handler}]
     ["/d/:id/v2/pipeline" {:post :linear.handler.turso.push/handler}]
     ["/control/v1/vaults" {:post :linear.handler.vault/create}]
+    ["/control/v1/vaults/:id/databases" {:post :linear.handler.database/create
+                                         :get :linear.handler.database/list-by-vault}]
+    ["/control/v1/databases/:id" {:get :linear.handler.database/get-by-id
+                                  :patch :linear.handler.database/update-attributes
+                                  :delete :linear.handler.database/close}]
     ["/control/v1/vaults/:id" {:get :linear.handler.vault/get-state
                                :delete :linear.handler.vault/delete}]
     ["/control/v1/vaults/:id/recovery-token"

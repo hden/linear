@@ -22,6 +22,14 @@
 (defprotocol Evaluator
   (-evaluate [evaluator arg-map]))
 
+(defprotocol Initializer
+  (-initial-revision [initializer]))
+
+(defn initial-revision
+  {:malli/schema [:-> [:fn #(satisfies? Initializer %)] ::revisions/revision]}
+  [initializer]
+  (-initial-revision initializer))
+
 (defn evaluator? [value]
   (satisfies? Evaluator value))
 

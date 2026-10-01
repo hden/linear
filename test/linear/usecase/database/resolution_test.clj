@@ -17,9 +17,6 @@
   [{:keys [datasource database-id transaction-id]}]
   (jdbc/with-transaction [tx datasource]
     (jdbc/execute! tx
-                   ["UPDATE databases SET current_attributes = NULL WHERE id = ?"
-                    database-id])
-    (jdbc/execute! tx
                    ["INSERT INTO database_tombstones (id, database_id, created_by) VALUES (?, ?, ?)"
                     (str "t-" (random-uuid)) database-id transaction-id])))
 

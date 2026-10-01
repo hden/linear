@@ -50,7 +50,7 @@
               :actual-parent head}
              nil))))
 
-(defn- publish! [store revision database]
+(defn- publish! [store revision database initialize?]
   (let [database-id (:id database)
         keychain    (get-in database [:vault :keychain])]
     (with-open [^AutoCloseable leased-database
@@ -60,7 +60,12 @@
       (try
         (let [read-values #(ffi/await
                              (ffi/read-transaction-values transaction %))
-              head        (snapshot/head-revision-id read-values)]
+              head        (if initialize?
+                            (let [[value] (read-values [(key/head)])]
+                              (when value
+                                (throw (revision-conflict "Database HEAD already exists" {} nil)))
+                              nil)
+                            (snapshot/head-revision-id read-values))]
           (ensure-current-parent! head revision)
           (ffi/await
             (ffi/write-values transaction
@@ -88,13 +93,17 @@
           (ffi/close-snapshot! raw-snapshot))))))
 
 (extend-type linear.adapter.slatedb.connection.Connection
+  revisions/Initializable
+  (-initialize! [store {:keys [revision database]}]
+    (publish! store revision database true))
+
   revisions/ConsistentReadable
   (-read-consistently [store f database]
     (with-consistent-view store database f))
 
   revisions/RevisionWritable
   (-publish-next! [store revision database]
-    (publish! store revision database)))
+    (publish! store revision database false)))
 
 (defmethod integrant/init-key :linear.adapter.slatedb.store/store
   [_ options]

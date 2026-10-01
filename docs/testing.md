@@ -21,6 +21,9 @@ merge, constraint, and chunked-pull checks, and also verifies that a pull-only
 actor can bootstrap but cannot push and an ungranted actor cannot bootstrap.
 No external identity provider is required for this test.
 
+E2E creates resources through HTTP, bootstraps an empty DB, and verifies
+rename, closure, and recovery from a closed database.
+
 Tests live beside the boundary they exercise. Handler tests assert transport
 wire behavior, adapter tests exercise native and storage boundaries, and
 use-case tests use `reify` capability implementations when a domain operation

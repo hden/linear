@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { connect } from "@tursodatabase/sync";
 
 // Adapted from Turso upstream:
@@ -10,17 +11,47 @@ import { connect } from "@tursodatabase/sync";
 // bindings/python/tests/test_database_sync.py::test_push
 // bindings/python/tests/test_database_sync.py::test_pull_bytes_threshold
 
-const url = process.argv[2];
-assert(url, "usage: npm run e2e -- <linear-base-url>");
+const baseUrl = process.argv[2];
+assert(baseUrl, "usage: npm run e2e -- <linear-base-url>");
 const managerToken = process.env.LINEAR_E2E_MANAGER_TOKEN;
 const readerToken = process.env.LINEAR_E2E_READER_TOKEN;
+const readerSubject = process.env.LINEAR_E2E_READER_SUBJECT;
 const ungrantedToken = process.env.LINEAR_E2E_UNGRANTED_TOKEN;
 assert(managerToken, "LINEAR_E2E_MANAGER_TOKEN is required");
 assert(readerToken, "LINEAR_E2E_READER_TOKEN is required");
+assert(readerSubject, "LINEAR_E2E_READER_SUBJECT is required");
 assert(ungrantedToken, "LINEAR_E2E_UNGRANTED_TOKEN is required");
 
-const root = await mkdtemp(join(tmpdir(), "linear-turso-e2e-"));
 const clients = [];
+
+const control = (method, path, body, idempotencyKey) => fetch(`${baseUrl}${path}`, {
+  method,
+  headers: {
+    authorization: `Bearer ${managerToken}`,
+    "content-type": "application/json",
+    ...(idempotencyKey ? { "idempotency-key": idempotencyKey } : {})
+  },
+  ...(body ? { body: JSON.stringify(body) } : {})
+});
+
+const createdVault = await control("POST", "/control/v1/vaults", null, randomUUID());
+assert.equal(createdVault.status, 201);
+const vaultId = (await createdVault.json()).id;
+const collection = `/control/v1/vaults/${vaultId}/databases`;
+const createDatabase = async (body) => {
+  const response = await control("POST", collection, body, randomUUID());
+  assert.equal(response.status, 201, await response.clone().text());
+  const { id } = await response.json();
+  const location = new URL(response.headers.get("location"), baseUrl);
+  assert.equal(location.origin, baseUrl);
+  assert.equal(location.pathname, `/control/v1/databases/${id}`);
+  return id;
+};
+const databaseId = await createDatabase({ "display-name": "E2E" });
+const url = `${baseUrl}/d/${databaseId}`;
+const granted = await control("PUT", `/control/v1/vaults/${vaultId}/grants/${encodeURIComponent(readerSubject)}`, { permission: "pull" });
+assert.equal(granted.status, 204);
+const root = await mkdtemp(join(tmpdir(), "linear-turso-e2e-"));
 
 const rows = async (client, sql) =>
   (await client.prepare(sql)).all();
@@ -39,6 +70,11 @@ const connectClient = async (name, options = {}) => {
 
 try {
   const clientA = await connectClient("client-a");
+
+  assert.deepEqual(await rows(clientA, "SELECT name FROM sqlite_schema WHERE name = 't'"), []);
+  await clientA.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, value TEXT)");
+  await clientA.exec("INSERT INTO t (value) VALUES ('before-evaluator')");
+  await clientA.push();
 
   assert.deepEqual(await rows(clientA, "SELECT value FROM t WHERE id = 1"), [
     { value: "before-evaluator" }
@@ -138,6 +174,29 @@ try {
     { count: 50 }
   ]);
   assert(thresholdPulls > 1, `expected chunked bootstrap, got ${thresholdPulls} pull`);
+
+  const resourcePath = `/control/v1/databases/${databaseId}`;
+  assert.equal((await control("PATCH", resourcePath, { "display-name": "Renamed" })).status, 204);
+  assert.equal((await control("GET", resourcePath)).status, 200);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    assert.equal((await control("DELETE", resourcePath)).status, 204);
+  }
+  const closed = await (await control("GET", resourcePath)).json();
+  assert.equal(closed.state, "closed");
+  assert.equal(closed["display-name"], "Renamed");
+  const closedList = await (await control("GET", `${collection}?state=closed`)).json();
+  assert(closedList.databases.some(database => database.id === databaseId));
+  const pullAfterClose = await fetch(`${url}/pull-updates`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${managerToken}` },
+    body: new Uint8Array()
+  });
+  assert.equal(pullAfterClose.status, 400);
+  const recoveredId = await createDatabase({ "display-name": "Recovered", source: { "database-id": databaseId } });
+  assert.notEqual(recoveredId, databaseId);
+  const recovered = await connectClient("recovered", { url: `${baseUrl}/d/${recoveredId}` });
+  assert.deepEqual(await rows(recovered, "SELECT COUNT(*) AS count FROM threshold"), [{ count: 50 }]);
+  assert.equal((await (await control("GET", resourcePath)).json()).state, "closed");
 } finally {
   for (const client of clients.reverse()) {
     await client.close?.();

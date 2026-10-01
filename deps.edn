@@ -1,4 +1,5 @@
-{:deps {org.clojure/clojure                 {:mvn/version "1.12.5"}
+{:paths ["src" "resources"]
+ :deps {org.clojure/clojure                 {:mvn/version "1.12.5"}
         org.apache.commons/commons-pool2    {:mvn/version "2.13.1"}
         org.duct-framework/main             {:mvn/version "0.4.7"}
         org.duct-framework/module.logging   {:mvn/version "0.6.6"}

@@ -2,17 +2,8 @@
   (:require
    [clojure.java.io :as io]
    [integrant.core :as integrant]
-   [linear.adapter.crypto.tempel :as crypto]
-   [linear.adapter.slatedb.codec :as codec]
-   [linear.adapter.slatedb.connection :as connection]
-   [linear.adapter.slatedb.ffi :as ffi]
-   [linear.adapter.slatedb.key :as key]
    [linear.test :as test]
-   [linear.test-data.jwt :as jwt]
-   [linear.test-data.sqlite :as sqlite-data]
-   [linear.usecase.keychain :as keychain]
-   [next.jdbc :as jdbc]
-   [taoensso.tempel :as tempel])
+   [linear.test-data.jwt :as jwt])
   (:import
    (java.lang ProcessHandle)
    (java.util.concurrent TimeUnit TimeoutException)
@@ -27,58 +18,11 @@
   (-> (read-config (io/file "duct.edn"))
       (assoc-in [:vars 'port] {:type :int :default 3000})))
 
-(defn- seed-postgres!
-  [datasource master-key {database-id :id :keys [manager reader vault]}]
-  (let [vault-id (:id vault)
-        transaction-id (str "tx-" (random-uuid))
-        attributes-id (str "a-" (random-uuid))
-        ciphertext (keychain/encrypt master-key {:associated-data (.getBytes ^String vault-id "UTF-8")
-                                                 :value (:keychain vault)})]
-    (jdbc/with-transaction [tx datasource]
-      (jdbc/execute! tx
-                     ["INSERT INTO transactions (id, actor) VALUES (?, ?)"
-                      transaction-id manager])
-      (jdbc/execute! tx
-                     ["INSERT INTO vaults (id, ciphertext, encrypted_by, created_by) VALUES (?, ?, ?, ?)"
-                      vault-id ciphertext "dev-ephemeral" transaction-id])
-      (jdbc/execute! tx
-                     ["INSERT INTO databases (id, encrypted_by, current_attributes) VALUES (?, ?, ?)"
-                      database-id vault-id attributes-id])
-      (jdbc/execute! tx
-                     ["INSERT INTO database_attributes (id, database_id, display_name, created_by) VALUES (?, ?, ?, ?)"
-                      attributes-id database-id "E2E" transaction-id])
-      (jdbc/execute! tx
-                     ["INSERT INTO vault_grants (vault_id, subject, permission) VALUES (?, ?, ?), (?, ?, ?)"
-                      vault-id manager "manage" vault-id reader "pull"]))))
-
-(defn- root-records [keychain pages]
-  (let [revision     {:revision-id         "r-root"
-                      :parent              nil
-                      :database-page-count (count pages)
-                      :pages               pages}
-        revision-key (key/revision (:revision-id revision))]
-    (into [[revision-key
-            (codec/encode-revision keychain {:record-key revision-key :revision revision})]]
-          (concat
-            (map (fn [[page-id page]]
-                   (let [page-key (key/page page-id)]
-                     [page-key (codec/encode-page keychain {:record-key page-key :page page})]))
-                 pages)
-            [[(key/head)
-              (codec/encode-head {:revision-id (:revision-id revision)})]]))))
-
-(defn- seed! [store database pages]
-  (with-open [leased-database (connection/database store {:database-id (:id database)})
-              transaction     (connection/writable-transaction leased-database)]
-    (ffi/await (ffi/write-values transaction (root-records (get-in database [:vault :keychain]) pages)))
-    (ffi/await (ffi/commit-transaction transaction))))
-
-(defn- server-url [system database-id]
+(defn- server-url [system]
   (let [server    (:server (:duct.server.http/jetty system))
         connector (aget (.getConnectors server) 0)
         port      (.getLocalPort ^NetworkConnector connector)]
-    (str "http://127.0.0.1:" port "/d/"
-         database-id)))
+    (str "http://127.0.0.1:" port)))
 
 (defn- stop-client! [processes]
   (let [deadline (+ (System/nanoTime) (.toNanos TimeUnit/SECONDS 5))]
@@ -143,22 +87,10 @@
                             :profiles [:test :main]
                             :vars     (assoc (jwt/oidc-vars fixture) 'port 0)})]
       (try
-        (let [master-key (:linear.adapter.crypto.tempel/master-key system)
-              keychain   (crypto/keychain (tempel/keychain))
-              database   {:id (str "d-e2e-" (random-uuid))
-                          :display-name "E2E"
-                          :manager manager
-                          :reader reader
-                          :vault {:id (str "v-e2e-" (random-uuid))
-                                  :created java.time.Instant/EPOCH
-                                  :keychain keychain}}]
-          (seed-postgres! (:duct.database.sql/hikaricp system) master-key database)
-          (seed! (:linear.adapter.slatedb.store/store system)
-                 database
-                 (sqlite-data/pages {:image (sqlite-data/sqlite-image)}))
-          (run-client! (server-url system (:id database))
-                       {"LINEAR_E2E_MANAGER_TOKEN" (jwt/access-token fixture {:subject manager})
-                        "LINEAR_E2E_READER_TOKEN" (jwt/access-token fixture {:subject reader})
-                        "LINEAR_E2E_UNGRANTED_TOKEN" (jwt/access-token fixture {:subject ungranted})}))
+        (run-client! (server-url system)
+                     {"LINEAR_E2E_MANAGER_TOKEN" (jwt/access-token fixture {:subject manager})
+                      "LINEAR_E2E_READER_TOKEN" (jwt/access-token fixture {:subject reader})
+                      "LINEAR_E2E_READER_SUBJECT" reader
+                      "LINEAR_E2E_UNGRANTED_TOKEN" (jwt/access-token fixture {:subject ungranted})})
         (finally
           (integrant/halt! system))))))

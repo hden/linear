@@ -97,6 +97,18 @@
 (defprotocol RevisionWritable
   (-publish-next! [writer revision database]))
 
+(defprotocol Initializable
+  (-initialize! [writer arg-map]))
+
+(defn initialize!
+  {:malli/schema [:-> [:fn #(satisfies? Initializable %)]
+                  [:map
+                   [:revision [:and ::revision [:map [:parent :nil]]]]
+                   [:database [:map [:id :string] [:vault [:map [:keychain :any]]]]]]
+                  ::revision]}
+  [writer arg-map]
+  (-initialize! writer arg-map))
+
 (defn revision-writable? [value]
   (satisfies? RevisionWritable value))
 

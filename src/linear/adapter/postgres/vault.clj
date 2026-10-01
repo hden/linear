@@ -1,5 +1,6 @@
 (ns linear.adapter.postgres.vault
   (:require
+   [cognitect.anomalies :as anomaly]
    [labrador.core :as lab]
    [linear.adapter.postgres.core :as core]
    [linear.usecase.vault :as vault])
@@ -37,6 +38,10 @@
                                                             [:= :t.actor actor]
                                                             [:= :t.idempotency-key idempotency-key]]
                                                :order-by   [[:v.id :asc]]}})]
+          (when (empty? rows)
+            (throw (ex-info "Idempotency key belongs to another operation"
+                            {::anomaly/category ::anomaly/conflict
+                             :reason ::core/transaction-idempotency-conflict})))
           {:ids (into (sorted-set) (keep :id rows))
            :created? false}))))
   (-read [tx {:keys [vault-id lock?]}]

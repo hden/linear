@@ -19,9 +19,9 @@
           {:status 201
            :body {:id (first ids)}}))
       (catch Exception error
-        {:status (if (= ::anomaly/incorrect
-                        (::anomaly/category (ex-data error)))
-                   400
+        {:status (case (::anomaly/category (ex-data error))
+                   ::anomaly/incorrect 400
+                   ::anomaly/conflict 409
                    500)
          :body {:error (.getMessage error)}}))))
 

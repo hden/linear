@@ -1,5 +1,6 @@
 (ns linear.adapter.sqlite.evaluator
   (:require
+   [clojure.java.io :as io]
    [cognitect.anomalies :as anomaly]
    [diehard.core :refer [with-timeout]]
    [hden.ulid :refer [ulid]]
@@ -84,6 +85,13 @@
   (signal-if-drained! (swap! state update :active dec)))
 
 (defrecord ^:private Evaluator [resources state shutdown-timeout-ms]
+  evaluator/Initializer
+  (-initial-revision [_]
+    (with-open [input (io/input-stream (io/resource "linear/adapter/sqlite/empty.db"))]
+      {:revision-id (str "r-" (ulid))
+       :parent nil
+       :database-page-count 1
+       :pages {1 (.readAllBytes ^java.io.InputStream input)}}))
   healthcheck/Checkable
   (-ready? [_]
     (= :ready (:status @state)))

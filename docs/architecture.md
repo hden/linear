@@ -128,10 +128,12 @@ Database retrieval is composed in one PostgreSQL transaction as:
 raw database -> require grant for its vault ID -> composed vault
 ```
 
-The lifecycle invariant is that a database with `current_attributes` is not
-tombstoned. Normal retrieval joins its current attributes, so a closed identity
-whose pointer has been cleared is absent from this path. Both missing and closed
-identities produce `database-not-found`; they never become operable models.
+Database closure retains `current_attributes` and records a tombstone. Normal
+sync retrieval joins current attributes and excludes tombstoned identities.
+Both missing and closed identities produce `database-not-found`; they never
+become operable sync models. Management retrieval includes tombstones so closed
+resources remain readable and available as revision-based recovery sources.
+See [database-lifecycle.md](database-lifecycle.md) for the HTTP contract.
 Vault composition resolves the configured master key and decrypts the data key
 before the database is used.
 
