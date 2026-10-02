@@ -39,3 +39,5 @@ argument maps, generate incidental IDs, and return those IDs to callers.
 
 Tests that block work must release it and join any asynchronous tasks during
 cleanup, so a failed assertion cannot leave resources or futures blocked.
+
+See the [CI workflow](../.github/workflows/ci.yml) for automated checks.

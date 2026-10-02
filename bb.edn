@@ -20,6 +20,8 @@
             :task (apply clojure "-M:cov" *command-line-args*)}
   crap {:doc "Runs CRAP analysis"
         :task (apply clojure "-M:crap" *command-line-args*)}
+  crap:check {:doc "Checks CRAP scores against the supplied limit using existing coverage"
+              :task (apply clojure "-M:crap:crap-check" *command-line-args*)}
   e2e {:doc "Runs the JavaScript Turso sync end-to-end test"
        :task (clojure "-M:e2e")}
   repl {:doc "Starts a REPL"

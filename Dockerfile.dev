@@ -4,7 +4,7 @@ ARG BABASHKA_VERSION=1.13.219
 ARG TARGETARCH
 
 RUN apt-get update \
- && apt-get install --yes --no-install-recommends curl libsqlite3-dev nodejs npm rlwrap unzip \
+ && apt-get install --yes --no-install-recommends curl git libsqlite3-dev nodejs npm rlwrap unzip \
  && rm -rf /var/lib/apt/lists/* \
  && curl --fail --location --silent --show-error \
       --output /tmp/install-clojure.sh \

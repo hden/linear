@@ -3,9 +3,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "e2e": "node test/e2e/turso-sync.mjs"
+    "e2e": "node test/e2e/turso-sync.mjs",
+    "lint:secrets": "secretlint \"**/*\""
   },
   "dependencies": {
     "@tursodatabase/sync": "0.8.1"
+  },
+  "devDependencies": {
+    "@secretlint/secretlint-rule-preset-recommend": "13.0.6",
+    "secretlint": "13.0.6"
   }
 }

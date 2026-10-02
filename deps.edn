@@ -64,6 +64,8 @@
                       ring/ring-mock
                       {:mvn/version "0.6.2"}}
          :main-opts ["-m" "crap4clj.core"]}
+  :crap-check {:extra-paths ["scripts"]
+               :main-opts ["-m" "linear.crap"]}
   :e2e {:extra-paths ["test"]
         :extra-deps {org.xerial/sqlite-jdbc {:mvn/version "3.53.4.0"}}
         :jvm-opts ["--enable-native-access=ALL-UNNAMED"]

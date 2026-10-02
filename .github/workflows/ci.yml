@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      COMPOSE_PROJECT_NAME: linear-ci
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Build development image
+        run: docker compose build app
+      - name: Start PostgreSQL
+        run: docker compose up --detach --wait postgres
+      - name: Install JavaScript dependencies
+        run: docker compose run --rm app npm ci
+      - name: Check secrets
+        run: docker compose run --rm app npm run lint:secrets
+      - name: Check formatting
+        run: docker compose run --rm app bb format:check
+      - name: Lint
+        run: docker compose run --rm app bb lint
+      - name: Check architecture
+        run: docker compose run --rm app bb architecture
+      - name: Test architecture checker
+        run: docker compose run --rm app bb architecture:test
+      - name: Check reflection
+        run: docker compose run --rm app bb check
+      - name: Test
+        run: docker compose run --rm app bb test
+      - name: Test Turso SDK end to end
+        run: docker compose run --rm app bb e2e
+      - name: Measure coverage
+        run: docker compose run --rm app bb coverage
+      - name: Check CRAP scores
+        run: docker compose run --rm app bb crap:check 30
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          use_oidc: true
+          files: target/coverage/lcov.info
+          disable_search: true
+          fail_ci_if_error: true
+      - name: Save coverage reports
+        if: ${{ !cancelled() && hashFiles('target/coverage/lcov.info') != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: cloverage
+          path: target/coverage/
+          retention-days: 14
+          if-no-files-found: error
+      - name: Show Compose logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Clean up
+        if: always()
+        run: docker compose down --volumes --remove-orphans
