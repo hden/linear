@@ -5,9 +5,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"$(git rev-parse --show-toplevel)/.codex/hooks/stop-check.sh\"",
-            "timeout": 120,
-            "statusMessage": "Running Clojure stop checks"
+            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null) && test -r \"$root/.codex/hooks/stop-check.sh\" && sh \"$root/.codex/hooks/stop-check.sh\" || printf '%s\\n' '{\"decision\":\"block\",\"reason\":\"Unable to run the required static source checks.\"}'",
+            "timeout": 60,
+            "statusMessage": "Checking source policies, dependencies, public APIs, and lint findings"
           }
         ]
       }

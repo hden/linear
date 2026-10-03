@@ -16,6 +16,7 @@ services:
       - postgres-data:/var/lib/postgresql
 
   app:
+    image: ${COMPOSE_PROJECT_NAME:-linear}-app
     init: true
     build:
       context: .
@@ -30,6 +31,16 @@ services:
       - .:/workspace
       - clojure-m2:/root/.m2
       - clojure-gitlibs:/root/.gitlibs
+
+  lint:
+    image: ${COMPOSE_PROJECT_NAME:-linear}-app
+    pull_policy: never
+    init: true
+    network_mode: none
+    environment:
+      JAVA_TOOL_OPTIONS: ""
+    volumes:
+      - .:/workspace
 
 volumes:
   clojure-gitlibs:

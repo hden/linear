@@ -24,7 +24,8 @@ WORKDIR /tmp/deps
 
 COPY deps.edn .
 
-RUN clojure -P \
+RUN clojure -P -M:lint \
+ && clojure -P \
  && case "$TARGETARCH" in \
       amd64) slatedb_platform=linux-x86-64 ;; \
       arm64) slatedb_platform=linux-aarch64 ;; \

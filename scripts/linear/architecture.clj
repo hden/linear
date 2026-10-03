@@ -5,7 +5,8 @@
    [clojure.string :as string]
    [clojure.tools.namespace.file :as namespace-file]
    [clojure.tools.namespace.find :as namespace-find]
-   [clojure.tools.namespace.parse :as namespace-parse]))
+   [clojure.tools.namespace.parse :as namespace-parse]
+   [linear.policy :as policy]))
 
 (def ^:private approved-exceptions #{})
 
@@ -60,9 +61,15 @@
     (when-not declaration
       (throw (ex-info "Clojure source has no namespace declaration"
                       {:filename (.getPath ^java.io.File file)})))
-    {:namespace (namespace-parse/name-from-ns-decl declaration)
-     :dependencies (namespace-parse/deps-from-ns-decl declaration)
-     :filename (.getPath ^java.io.File file)}))
+    (let [namespace (namespace-parse/name-from-ns-decl declaration)]
+      (when-not (re-matches #"linear\.(?:spec|(?:handler|usecase|adapter|middleware|server)(?:\..+)?)"
+                  (str namespace))
+        (throw (ex-info "Source namespace has no approved architectural role"
+                        {:filename (.getPath ^java.io.File file)
+                         :namespace namespace})))
+      {:namespace namespace
+       :dependencies (namespace-parse/deps-from-ns-decl declaration)
+       :filename (.getPath ^java.io.File file)})))
 
 (defn discover [directories]
   (->> directories
@@ -112,45 +119,36 @@
 (defn- violation [usage rule message]
   (assoc usage :rule rule :message message))
 
-(defn violations [entries]
-  (let [dependency-usages (distinct (dependency-usages entries))
-        graph             (adjacency dependency-usages)]
-    (->> (concat
-           (keep (fn [usage]
-                   (when-let [[rule message] (dependency-rule usage)]
-                     (violation usage rule message)))
-                 dependency-usages)
-           (keep (fn [{:keys [from to] :as usage}]
-                   (when-let [path (cycle-path graph from to)]
-                     (violation usage
-                                :cycle
-                                (str "dependency cycle: "
-                                     (string/join " -> " path)))))
-                 dependency-usages))
-         (sort-by (juxt :filename :row #(str (:from %)) #(str (:to %)) :message))
-         vec)))
+(defn violations
+  ([entries] (violations entries {}))
+  ([entries {:keys [var-usages]}]
+   (let [var-dependencies (->> var-usages
+                            (filter #(and (linear-namespace? (:from %))
+                                          (linear-namespace? (:to %))
+                                          (not= (:from %) (:to %))))
+                            (map #(select-keys % [:filename :row :from :to])))
+         dependency-usages (distinct (concat (dependency-usages entries) var-dependencies))
+         graph             (adjacency dependency-usages)]
+     (->> (concat
+            (keep (fn [usage]
+                    (when-let [[rule message] (dependency-rule usage)]
+                      (violation usage rule message)))
+                  dependency-usages)
+            (keep (fn [{:keys [from to] :as usage}]
+                    (when-let [path (cycle-path graph from to)]
+                      (violation usage
+                                 :cycle
+                                 (str "dependency cycle: "
+                                      (string/join " -> " path)))))
+                  dependency-usages))
+          (sort-by (juxt :filename :row #(str (:from %)) #(str (:to %)) :message))
+          vec))))
 
-(defn format-violation [{:keys [filename row from to message]}]
-  (str filename ":" row ": " from " -> " to ": " message))
-
-(defn- require-all! [entries]
-  (doseq [namespace (map :namespace entries)]
-    (try
-      (require namespace)
-      (catch Exception ex
-        (throw (ex-info (str "Failed loading namespace " namespace)
-                        {:namespace namespace}
-                        ex))))))
-
-(defn -main [& _]
+(defn -main []
   (let [entries        (discover ["src"])
-        namespace-violations (violations entries)
-        var-violations ((requiring-resolve 'linear.architecture-var/violations-for-paths)
-                        ["src"])
-        failures       (sort-by (juxt :filename :row :message)
-                                (concat namespace-violations var-violations))]
+        source-analysis (policy/analyze-sources {:paths ["src"]})
+        failures (violations entries {:var-usages (:var-usages source-analysis)})]
     (doseq [failure failures]
-      (println (format-violation failure)))
-    (if (seq failures)
-      (System/exit 1)
-      (require-all! entries))))
+      (println (policy/format-violation failure)))
+    (when (seq failures)
+      (System/exit 1))))

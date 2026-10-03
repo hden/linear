@@ -203,32 +203,62 @@ status codes and wire formats.
 
 ## Enforcement
 
-Run `bb architecture` to discover `src` with tools.namespace, check its
-dependency graph, require every discovered namespace, and run the separate
-clj-kondo var-usage checker. Run `bb architecture:test` to verify representative
-structural rules, cycles, forbidden vars, and stable diagnostics. These checker
-tests live under `scripts` and are intentionally excluded from the application
-test classpath and `bb test` suite.
+`bb lint` enforces static source constraints: source policies, architectural
+rules, public API rules, and ordinary clj-kondo findings. It does not load
+application namespaces. `bb architecture` and `bb policy:check` remain focused
+commands for dependency rules and source policies respectively.
 
-The harness checks:
+Policy checks inspect `src`, `test`, `scripts`, and `.clj-kondo/hooks` with fixed
+analysis settings. Global Var replacement has no exceptions. Dynamic code and
+name resolution require an exact calling var, target, and reason in the checker;
+there are currently no approved dynamic references. Namespace-wide exemptions
+and inline lint suppression are forbidden. Missing sources, parse failures,
+and missing analysis are errors. Repository lint configuration cannot disable
+these policies.
+
+Dependency checks discover every source namespace and combine namespace
+imports with resolved Var references, including fully qualified calls. Unknown
+source roles are denied. The checks cover:
 
 - layer and adapter-technology dependency direction;
 - dependency cycles;
 - cross-technology adapter dependencies;
 - outward dependencies from adapter `core` namespaces;
-- `lab/fetch` inside adapters;
-- `defretriever` inside use-cases; and
-- loadability of every discovered source namespace.
+- `lab/fetch` inside adapters; and
+- `defretriever` inside use-cases.
 
-Diagnostics have the stable form:
+`bb lint` runs one JVM. Policy and dependency checks share one fixed-configuration
+analysis; ordinary lint uses a separate analysis with the repository's lint
+configuration and hooks. Both analyses ignore home-directory configuration and
+clj-kondo caches. Static tooling uses its own dependencies rather than the
+application's runtime classpath.
+
+The Stop hook runs `bb lint` through the Compose `lint` service. This service
+uses the prepared development image with no network, database dependency, or
+mutable development dependency volumes. Prepare tooling with
+`docker compose build app`. The static tasks invoke the Clojure CLI already
+installed in the image; they do not bootstrap Babashka's separate Clojure CLI.
+Violations and incomplete checks block completion. Repeated Stop events do not
+bypass the checks.
+
+CI runs `bb verify`: `lint`, `check`, `format:check`, and the complete application
+test suite. `bb check` loads the namespaces discovered under `src` with
+reflection warnings enabled. E2E, coverage, and CRAP remain separate CI steps.
+
+Scripts must not contain tests, and tests must not target verification, lint,
+architecture, setup scripts, or hooks, regardless of placement. The policy
+checker rejects script test files, test dependencies on script namespaces, and
+references to script or hook paths in application tests. Run verification
+scripts against the actual repository instead.
+
+Policy and dependency diagnostics have the stable form:
 
 ```text
-file:line: from -> to: rule
+file:line: rule: from -> to: message
 ```
 
-See [testing.md](testing.md) for the test placement rules, integration-test
-metadata, and the distinction between the instrumented `bb test` suite and
-the `clojure.test` coverage runner.
+See [testing.md](testing.md) for application test boundaries and validation
+commands.
 
 ## Influences
 

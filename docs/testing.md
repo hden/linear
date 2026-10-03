@@ -37,6 +37,12 @@ must be isolated from infrastructure. Shared integration setup is in
 argument maps, generate incidental IDs, and return those IDs to callers.
 `sqlite-image` is a fixed fixture and intentionally has no arguments.
 
+Run relevant application tests while changing behavior. The Stop hook checks
+static source constraints with `bb lint`; it does not run application tests.
+`bb verify` is the complete local and CI gate: static lint, source loading,
+formatting, and the full instrumented application suite. E2E and coverage are
+separate commands.
+
 Tests that block work must release it and join any asynchronous tasks during
 cleanup, so a failed assertion cannot leave resources or futures blocked.
 
