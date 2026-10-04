@@ -1,5 +1,17 @@
 # Linear
 
+Linear is an Apache-2.0 service for authenticated Turso SDK synchronization.
+Release images are published at `ghcr.io/hden/linear` for `linux/amd64` and
+`linux/arm64`. Pin a published version (for example, after the first release):
+
+```sh
+docker pull ghcr.io/hden/linear:0.1.0
+```
+
+See the [deployment guide](docs/deployment.md) to connect your own Auth0,
+PostgreSQL, GCP KMS, and GCS resources. See [release maintenance](docs/releases.md)
+for publishing images. The source is licensed under [Apache-2.0](LICENSE).
+
 ## Documentation
 
 - [Architecture](docs/architecture.md): dependency direction and capability boundaries.
@@ -58,32 +70,7 @@ docker compose run --rm app clojure -M:duct --show --main
 docker compose run --rm app bb repl
 ```
 
-For GCP, provide `GCP_KMS_KEY_NAME` naming a shared `ENCRYPT_DECRYPT` CryptoKey
-and [ADC](https://docs.cloud.google.com/docs/authentication/application-default-credentials)
-with `roles/cloudkms.cryptoKeyEncrypterDecrypter` on that key. Build the same
-image and pass credentials and application settings at runtime:
-
-```sh
-export GCP_KMS_KEY_NAME="projects/my-project/locations/global/keyRings/linear/cryptoKeys/kek"
-docker build -t linear .
-docker run --rm -p 3000:3000 \
-  -e LINEAR_DEPLOYMENT_TARGET=gcp -e GCP_KMS_KEY_NAME \
-  -e OIDC_ISSUER -e OIDC_AUDIENCE -e OIDC_JWKS_URL \
-  -e JDBC_DATABASE_URL -e SLATEDB_OBJECT_STORE_URL \
-  --mount type=bind,src=/absolute/path/to/adc.json,dst=/run/adc.json,readonly \
-  -e GOOGLE_APPLICATION_CREDENTIALS=/run/adc.json \
-  linear
-```
-
-Set `JDBC_DATABASE_URL` and `SLATEDB_OBJECT_STORE_URL` to the deployment's
-storage endpoints. The dev defaults are local PostgreSQL and in-memory
-SlateDB. On GCP infrastructure with an attached service account, ADC can use
-that identity without the credential file mount.
-
-Append `clojure -M:duct --show --main` to the same `docker run` command to
-inspect configuration. For a REPL, add `-it` and append `bb repl`. The service owns its KEK
-or SDK client and exposes the same key generation and protection capabilities
-for both targets.
+For persistent GCP deployments, follow the [deployment guide](docs/deployment.md).
 
 ## Authentication
 
