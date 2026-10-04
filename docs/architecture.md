@@ -99,8 +99,9 @@ the Vault use-case composes data-key generation, wrapping, and persistence.
 Data keys are Vault values, not application lifecycle components.
 
 Provider selection is adapter configuration. The local provider owns an
-ephemeral KEK. Provider names and Tempel representations do not appear in the
-capability contracts or application context. Shared data-key mechanisms live in
+ephemeral KEK; the remote provider owns and closes its SDK client. SDK objects,
+provider names, and Tempel representations do not appear in the capability
+contracts or application context. Shared data-key mechanisms live in
 `linear.adapter.crypto.core`; providers depend inward on those mechanisms.
 
 The configured protection key is already available as a capability. Vault
