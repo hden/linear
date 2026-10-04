@@ -10,7 +10,7 @@
     "@tursodatabase/sync": "0.8.1"
   },
   "devDependencies": {
-    "@secretlint/secretlint-rule-preset-recommend": "13.0.6",
-    "secretlint": "13.0.6"
+    "@secretlint/secretlint-rule-preset-recommend": "13.0.7",
+    "secretlint": "13.0.7"
   }
 }
