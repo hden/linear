@@ -24,7 +24,8 @@ WORKDIR /tmp/deps
 
 COPY deps.edn .
 
-RUN clojure -P \
+RUN clojure -P -M:lint \
+ && clojure -P \
  && case "$TARGETARCH" in \
       amd64) slatedb_platform=linux-x86-64 ;; \
       arm64) slatedb_platform=linux-aarch64 ;; \
@@ -41,3 +42,9 @@ RUN clojure -P \
 ENV JAVA_TOOL_OPTIONS="--enable-native-access=ALL-UNNAMED -Djava.library.path=/usr/local/lib"
 
 WORKDIR /workspace
+
+COPY deps.edn bb.edn duct.edn migrations.edn ./
+COPY src ./src
+COPY resources ./resources
+
+CMD ["clojure", "-M:duct", "--main"]

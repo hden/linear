@@ -28,31 +28,29 @@
                      :reason ::vault-deleted
                      :vault-id id}))))
 
-(defn- require-master-key [configured encrypted-by]
-  (when-not configured
+(defn- require-key-protection [protection encrypted-by]
+  (when-not (and protection (= encrypted-by (keychain/id protection)))
     (throw (ex-info "Master key is not configured"
                     {::anomaly/category ::anomaly/fault
                      :reason ::master-key-not-configured
                      :master-key-id encrypted-by}))))
 
-(defn retriever [id]
+(defn retriever [id {:keys [key-protection]}]
   (u/mapcat
     (fn [{:keys [ciphertext encrypted-by] :as vault}]
       (require-active vault)
-      (u/mapcat
-        (fn [configured]
-          (require-master-key configured encrypted-by)
-          (if-let [keychain (keychain/decrypt configured {:associated-data (.getBytes ^String id "UTF-8")
-                                                          :ciphertext ciphertext})]
-            (lab/traverse
-              (-> vault
-                  (assoc :keychain keychain)
-                  (dissoc :ciphertext :encrypted-by)))
-            (throw (ex-info "Vault keychain could not be decrypted"
-                            {::anomaly/category ::anomaly/fault
-                             :reason ::vault-decryption-failed
-                             :vault-id id}))))
-        (lab/fetch ::keychain/master-key encrypted-by)))
+      (require-key-protection key-protection encrypted-by)
+      (if-let [data-key (keychain/unwrap key-protection
+                          {:associated-data (.getBytes ^String id "UTF-8")
+                           :ciphertext ciphertext})]
+        (lab/traverse
+          (-> vault
+              (assoc :keychain data-key)
+              (dissoc :ciphertext :encrypted-by)))
+        (throw (ex-info "Vault keychain could not be decrypted"
+                        {::anomaly/category ::anomaly/fault
+                         :reason ::vault-decryption-failed
+                         :vault-id id}))))
     (lab/fetch ::vault id)))
 
 (defn- run-retriever [retriever env]
@@ -65,16 +63,15 @@
         (throw error)))))
 
 (defn resolve-by-id
-  [tx {:keys [vault-id master-key]}]
-  (run-retriever (retriever vault-id) {:tx tx ::core/master-key master-key}))
+  [tx {:keys [vault-id key-protection]}]
+  (run-retriever (retriever vault-id {:key-protection key-protection}) {:tx tx}))
 
-(defn- fetch [master-key tx ids]
+(defn- fetch [key-protection tx ids]
   (run-retriever (lab/traverse (into {}
                                  (map (fn [id]
-                                        [id (retriever id)]))
+                                        [id (retriever id {:key-protection key-protection})]))
                                  ids))
-    {:tx tx
-     ::core/master-key master-key}))
+    {:tx tx}))
 
 (defn create!
   {:malli/schema [:->
@@ -85,15 +82,15 @@
                    [:actor :string]]
                   [:vector :string]]}
   [context {:keys [actor data idempotency-key]}]
-  (let [master-key (core/master-key context)
+  (let [key-protection (core/key-protection context)
         vaults     (mapv (fn [attributes]
                            (let [id       (vault-id)
-                                 keychain (core/keychain context)]
+                                 keychain (keychain/generate (core/key-generator context))]
                              (assoc attributes
                                     :id id
-                                    :ciphertext (keychain/encrypt master-key {:associated-data (.getBytes ^String id "UTF-8")
-                                                                              :value keychain})
-                                    :encrypted-by (keychain/id master-key))))
+                                    :ciphertext (keychain/wrap key-protection {:associated-data (.getBytes ^String id "UTF-8")
+                                                                               :keychain keychain})
+                                    :encrypted-by (keychain/id key-protection))))
                          data)]
     (transaction/with-transaction [tx (core/transactable context)]
       (let [{:keys [ids created?]} (-create! tx {:actor actor
@@ -121,7 +118,7 @@
       (grant/require-permission tx {:actor actor
                                     :vault-id id
                                     :permission :pull}))
-    (fetch (core/master-key context) tx ids)))
+    (fetch (core/key-protection context) tx ids)))
 
 (defn- state [vault]
   (assoc (dissoc vault :ciphertext :encrypted-by)
@@ -179,16 +176,12 @@
   (transaction/with-transaction [tx (core/transactable context)]
     (let [stored (authorized-vault tx arg-map :manage true)
           {:keys [encrypted-by ciphertext]} (decode-token token vault-id)
-          configured (u/run!! (lab/fetch ::keychain/master-key encrypted-by)
-                              {:env {:tx tx ::core/master-key (core/master-key context)}})]
-      (require-master-key configured encrypted-by)
-      (let [decrypted (try
-                        (keychain/decrypt configured
-                                          {:associated-data (.getBytes ^String vault-id "UTF-8")
-                                           :ciphertext ciphertext})
-                        (catch Exception _ (throw (invalid-token))))]
-        (when-not (keychain/keychain? decrypted)
-          (throw (invalid-token))))
+          key-protection (core/key-protection context)]
+      (require-key-protection key-protection encrypted-by)
+      (when-not (keychain/unwrap key-protection
+                  {:associated-data (.getBytes ^String vault-id "UTF-8")
+                   :ciphertext ciphertext})
+        (throw (invalid-token)))
       (when-not (:ciphertext stored)
         (-store-key! tx {:vault-id vault-id :encrypted-by encrypted-by :ciphertext ciphertext}))
       nil)))

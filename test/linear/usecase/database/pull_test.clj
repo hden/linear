@@ -19,10 +19,10 @@
                                     :linear.adapter.slatedb.store/store]})]
     (let [datasource  (:duct.database.sql/hikaricp system)
           store       (:linear.adapter.slatedb.store/store system)
-          {:keys [database-id master-key keychain]}
+          {:keys [database-id key-protection keychain]}
           (postgres-data/create-database! {:datasource datasource})
           context     {::core/database datasource
-                       ::core/master-key master-key
+                       ::core/key-service key-protection
                        ::core/revision-store store}
           page        (byte-array [1 2 3 4])]
       (slatedb-data/store-root! {:store store :database-id database-id :keychain keychain :pages {1 page}})
@@ -34,7 +34,7 @@
 (deftest ^:integration pull-fetches-pages-before-the-view-and-read-transaction-close
   (with-system [system (run {:keys [:duct.database/sql :duct.migrator/ragtime]})]
     (let [datasource (:duct.database.sql/hikaricp system)
-          {:keys [database-id master-key]} (postgres-data/create-database! {:datasource datasource})
+          {:keys [database-id key-protection]} (postgres-data/create-database! {:datasource datasource})
           read-connection (atom nil)
           transactable (reify transaction/Transactable
                          (-transact [_ f options]
@@ -65,7 +65,7 @@
                      (reset! active? true)
                      (try (f view) (finally (reset! active? false)))))
           result (database/pull {::core/database transactable
-                                 ::core/master-key master-key
+                                 ::core/key-service key-protection
                                  ::core/revision-store reader}
                                 {:actor "actor-1" :database-id database-id})]
       (is @fetched?)
@@ -78,9 +78,9 @@
                                     :linear.adapter.slatedb.store/store]})]
     (let [datasource (:duct.database.sql/hikaricp system)
           store (:linear.adapter.slatedb.store/store system)
-          {:keys [database-id vault-id master-key keychain]}
+          {:keys [database-id vault-id key-protection keychain]}
           (postgres-data/create-database! {:datasource datasource})
-          ctx {::core/database datasource ::core/master-key master-key ::core/revision-store store}
+          ctx {::core/database datasource ::core/key-service key-protection ::core/revision-store store}
           args {:actor "actor-1" :vault-id vault-id}
           token (#'vault/recovery-token ctx args)
           delete-fn #'vault/delete!

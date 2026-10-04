@@ -81,7 +81,7 @@
 (defn- recovery-root-revision [tx context actor {:keys [revision-id] :as source}]
   (let [resource (authorized-resource tx (assoc source :actor actor) :pull)
         source-database (assoc resource :vault (vault/resolve-by-id tx {:vault-id (:vault-id resource)
-                                                                        :master-key (core/master-key context)}))]
+                                                                        :key-protection (core/key-protection context)}))]
     (revisions/with-consistent-view [view (core/consistent-readable context) source-database]
       (let [snapshot (if revision-id (revisions/as-of view revision-id) (revisions/head view))
             size (revisions/size snapshot)]
@@ -108,7 +108,7 @@
       (do
         (grant/require-permission tx {:actor actor :vault-id vault-id :permission :manage})
         (vault/require-active (vault/-read tx {:vault-id vault-id :lock? true}))
-        (let [target-vault (vault/resolve-by-id tx {:vault-id vault-id :master-key (core/master-key context)})
+        (let [target-vault (vault/resolve-by-id tx {:vault-id vault-id :key-protection (core/key-protection context)})
               {:keys [created?] :as result} (-create! tx arg-map)
               id (creation-id result vault-id)]
           (when created?
@@ -121,17 +121,15 @@
 (defmethod spec-for ::database [_]
   ::model/database)
 
-(defn resolve-by-id [tx {:keys [actor database-id master-key permission]}]
-  (let [env      {:tx tx
-                  :linear.usecase.core/master-key master-key}
-        database (u/run!! (lab/fetch ::database database-id) {:env env})]
+(defn resolve-by-id [tx {:keys [actor database-id key-protection permission]}]
+  (let [database (u/run!! (lab/fetch ::database database-id) {:env {:tx tx}})]
     (if-let [vault-id (:vault-id database)]
       (do
         (grant/require-permission tx {:actor actor
                                       :vault-id vault-id
                                       :permission permission})
         (-> database
-            (assoc :vault (vault/resolve-by-id tx {:vault-id vault-id :master-key master-key}))
+            (assoc :vault (vault/resolve-by-id tx {:vault-id vault-id :key-protection key-protection}))
             (dissoc :vault-id)))
       (throw (ex-info "Database was not found"
                       {::anomaly/category ::anomaly/not-found
@@ -150,7 +148,7 @@
        [tx# (core/transactable context#) {:read-only read-only#}]
        (let [resolved-database# (resolve-by-id tx# {:actor actor#
                                                     :database-id database-id#
-                                                    :master-key (core/master-key context#)
+                                                    :key-protection (core/key-protection context#)
                                                     :permission permission#})]
          (revisions/with-consistent-view
            [view# (core/consistent-readable context#) resolved-database#]

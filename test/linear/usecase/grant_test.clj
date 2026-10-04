@@ -8,14 +8,13 @@
    [linear.usecase.core :as core]
    [linear.usecase.grant :as grant]
    [linear.usecase.transaction :as transaction]
-   [linear.usecase.vault :as vault]
-   [taoensso.tempel :as tempel]))
+   [linear.usecase.vault :as vault]))
 
 (deftest ^:integration grants-are-managed-within-the-vault-policy
   (with-system [system (run {:keys [:duct.database/sql :duct.migrator/ragtime]})]
     (let [context {::core/database   (:duct.database.sql/hikaricp system)
-                   ::core/keychain   crypto/new-keychain
-                   ::core/master-key (crypto/keychain "dev-ephemeral" (tempel/keychain))}
+
+                   ::core/key-service (crypto/open {:key-id "dev-ephemeral"})}
           ids     (sort (vault/create! context {:actor "actor-1"
                                                 :data [{} {}]
                                                 :idempotency-key (str (random-uuid))}))
@@ -54,8 +53,8 @@
 (deftest ^:integration batch-revoke-retains-non-target-cross-pairs
   (with-system [system (run {:keys [:duct.database/sql :duct.migrator/ragtime]})]
     (let [context {::core/database   (:duct.database.sql/hikaricp system)
-                   ::core/keychain   crypto/new-keychain
-                   ::core/master-key (crypto/keychain "dev-ephemeral" (tempel/keychain))}
+
+                   ::core/key-service (crypto/open {:key-id "dev-ephemeral"})}
           [first-id second-id]
           (sort (vault/create! context {:actor "actor-1"
                                         :data [{} {}]

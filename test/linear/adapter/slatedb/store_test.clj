@@ -2,14 +2,13 @@
   (:require
    [clojure.test :refer [deftest is]]
    [cognitect.anomalies :as anomaly]
-   [linear.adapter.crypto.tempel :as crypto]
+   [linear.adapter.crypto.core :as crypto-core]
    [linear.adapter.slatedb.codec :as codec]
    [linear.adapter.slatedb.connection :as connection]
    [linear.adapter.slatedb.ffi :as ffi]
    [linear.adapter.slatedb.key :as key]
    [linear.adapter.slatedb.store]
-   [linear.usecase.database.revisions :as revisions]
-   [taoensso.tempel :as tempel])
+   [linear.usecase.database.revisions :as revisions])
   (:import
    (java.util Arrays)))
 
@@ -49,7 +48,7 @@
 
 (deftest ^:integration initialization-encrypts-root-and-refuses-to-replace-an-existing-head
   (let [store (connection/open {:object-store-url "memory:///" :max-open-databases 1})
-        keychain (crypto/keychain (tempel/keychain))
+        keychain (crypto-core/new-keychain)
         database (database-record keychain)
         root {:revision-id "r-created" :parent nil :database-page-count 1 :pages {1 (byte-array [1 2 3])}}]
     (try
@@ -71,7 +70,7 @@
 
 (deftest ^:integration initialization-refuses-a-stored-head-without-a-revision-id
   (let [store (connection/open {:object-store-url "memory:///" :max-open-databases 1})
-        keychain (crypto/keychain (tempel/keychain))]
+        keychain (crypto-core/new-keychain)]
     (try
       (with-open [database (connection/database store {:database-id "d-1"})
                   transaction (connection/writable-transaction database)]
@@ -92,7 +91,7 @@
 (deftest ^:integration failed-consistent-view-acquisition-returns-the-database-lease
   (let [store    (connection/open {:object-store-url   "memory:///"
                                    :max-open-databases 1})
-        keychain (crypto/keychain (tempel/keychain))]
+        keychain (crypto-core/new-keychain)]
     (try
       (with-open [leased-database (connection/database store {:database-id "d-1"})
                   transaction     (connection/writable-transaction leased-database)]
@@ -112,7 +111,7 @@
 (deftest ^:integration publishes-revision-pages-and-head-atomically
   (let [store     (connection/open {:object-store-url   "memory:///"
                                     :max-open-databases 1})
-        keychain  (crypto/keychain (tempel/keychain))
+        keychain  (crypto-core/new-keychain)
         root      {:revision-id         "r-root"
                    :parent              nil
                    :database-page-count 1
@@ -142,7 +141,7 @@
 (deftest ^:integration stale-parent-publishes-no-records
   (let [store     (connection/open {:object-store-url   "memory:///"
                                     :max-open-databases 1})
-        keychain  (crypto/keychain (tempel/keychain))
+        keychain  (crypto-core/new-keychain)
         root      {:revision-id         "r-root"
                    :parent              nil
                    :database-page-count 1
@@ -174,7 +173,7 @@
 (deftest ^:integration reads-the-latest-snapshot-through-the-domain-capability
   (let [store    (connection/open {:object-store-url   "memory:///"
                                    :max-open-databases 1})
-        keychain (crypto/keychain (tempel/keychain))
+        keychain (crypto-core/new-keychain)
         root     {:revision-id "r-root"
                   :parent nil
                   :database-page-count 1
@@ -195,7 +194,7 @@
 (deftest ^:integration reads-as-of-and-changes-since-through-one-domain-capability
   (let [store     (connection/open {:object-store-url   "memory:///"
                                     :max-open-databases 1})
-        keychain  (crypto/keychain (tempel/keychain))
+        keychain  (crypto-core/new-keychain)
         root      {:revision-id         "r-root"
                    :parent              nil
                    :database-page-count 1
@@ -241,7 +240,7 @@
                                 (fn [id raw]
                                   (swap! returned inc)
                                   ((:return-database store) id raw)))
-          database (database-record (crypto/keychain (tempel/keychain)))]
+          database (database-record (crypto-core/new-keychain))]
       (try
         (let [caught (try
                        (revisions/read-consistently observed-store {:f (fn [_] (throw failure)) :database database})

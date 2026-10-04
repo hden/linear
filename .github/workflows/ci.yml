@@ -32,18 +32,8 @@ jobs:
         run: docker compose run --rm app npm ci
       - name: Check secrets
         run: docker compose run --rm app npm run lint:secrets
-      - name: Check formatting
-        run: docker compose run --rm app bb format:check
-      - name: Lint
-        run: docker compose run --rm app bb lint
-      - name: Check architecture
-        run: docker compose run --rm app bb architecture
-      - name: Test architecture checker
-        run: docker compose run --rm app bb architecture:test
-      - name: Check reflection
-        run: docker compose run --rm app bb check
-      - name: Test
-        run: docker compose run --rm app bb test
+      - name: Verify source policies, static checks, and application tests
+        run: docker compose run --rm app bb verify
       - name: Test Turso SDK end to end
         run: docker compose run --rm app bb e2e
       - name: Measure coverage

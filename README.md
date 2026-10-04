@@ -30,13 +30,60 @@ sh scripts/init.sh
 ```
 
 Then copy `.env.example` to `.env` and run `direnv allow` in the repository.
-The checked-in `.envrc` loads `.env` and makes `JAVA_TOOL_OPTIONS` available to
-Clojure commands. Include the repository directory for
-`libslatedb_uniffi.dylib` and the Homebrew SQLite library directory in
-`-Djava.library.path`.
+The checked-in `.envrc` loads `.env` and configures `JAVA_TOOL_OPTIONS` with
+the repository and SQLite library directories for host Clojure commands.
 
 The development container provides both native libraries under
-`/usr/local/lib` and sets the JVM library path in `Dockerfile.dev`.
+`/usr/local/lib` and sets the JVM library path in `Dockerfile`.
+
+## Deployment target
+
+One `duct.edn` and one Docker image serve every deployment target.
+`LINEAR_DEPLOYMENT_TARGET` defaults to `dev`, which uses an ephemeral Tempel
+KEK regenerated on startup. Set it to `gcp` to use GCP KMS. All other values,
+including `aws`, fail at startup. JDBC and SlateDB remain independently
+configured through their existing environment variables.
+
+For local development, load `.env` with direnv and run:
+
+```sh
+docker compose up --build app
+```
+
+Compose forwards the deployment target, KMS key name, and OIDC settings.
+Use the same Duct commands for configuration inspection and REPL work:
+
+```sh
+docker compose run --rm app clojure -M:duct --show --main
+docker compose run --rm app bb repl
+```
+
+For GCP, provide `GCP_KMS_KEY_NAME` naming a shared `ENCRYPT_DECRYPT` CryptoKey
+and [ADC](https://docs.cloud.google.com/docs/authentication/application-default-credentials)
+with `roles/cloudkms.cryptoKeyEncrypterDecrypter` on that key. Build the same
+image and pass credentials and application settings at runtime:
+
+```sh
+export GCP_KMS_KEY_NAME="projects/my-project/locations/global/keyRings/linear/cryptoKeys/kek"
+docker build -t linear .
+docker run --rm -p 3000:3000 \
+  -e LINEAR_DEPLOYMENT_TARGET=gcp -e GCP_KMS_KEY_NAME \
+  -e OIDC_ISSUER -e OIDC_AUDIENCE -e OIDC_JWKS_URL \
+  -e JDBC_DATABASE_URL -e SLATEDB_OBJECT_STORE_URL \
+  --mount type=bind,src=/absolute/path/to/adc.json,dst=/run/adc.json,readonly \
+  -e GOOGLE_APPLICATION_CREDENTIALS=/run/adc.json \
+  linear
+```
+
+Set `JDBC_DATABASE_URL` and `SLATEDB_OBJECT_STORE_URL` to the deployment's
+storage endpoints. The dev defaults are local PostgreSQL and in-memory
+SlateDB. On GCP infrastructure with an attached service account, ADC can use
+that identity without the credential file mount.
+
+Append `clojure -M:duct --show --main` to the same `docker run` command to
+inspect configuration. For a REPL, add `-it` and append `bb repl`. The service owns its KEK
+or SDK client and exposes the same key generation and protection capabilities
+for both targets.
 
 ## Authentication
 
