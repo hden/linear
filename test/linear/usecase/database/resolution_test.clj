@@ -10,8 +10,7 @@
    [linear.usecase.database :as database]
    [linear.usecase.keychain :as keychain]
    [linear.usecase.vault :as vault]
-   [next.jdbc :as jdbc]
-   [taoensso.tempel :as tempel]))
+   [next.jdbc :as jdbc]))
 
 (defn- tombstone-database!
   [{:keys [datasource database-id transaction-id]}]
@@ -24,13 +23,13 @@
   (with-system [system (run {:keys [:duct.database/sql
                                     :duct.migrator/ragtime]})]
     (let [datasource (:duct.database.sql/hikaricp system)
-          {:keys [database-id master-key transaction-id]} (postgres-data/create-database! {:datasource datasource})
+          {:keys [database-id key-protection transaction-id]} (postgres-data/create-database! {:datasource datasource})
           missing-id (str "d-" (random-uuid))
           resolve-error
           (fn [id]
             (try
               (jdbc/with-transaction [tx datasource {:read-only true}]
-                (database/resolve-by-id tx {:master-key master-key
+                (database/resolve-by-id tx {:key-protection key-protection
                                             :actor "actor-1"
                                             :permission :pull
                                             :database-id id}))
@@ -45,15 +44,15 @@
           (is (= ::database/database-not-found (-> error ex-data :reason)))
           (is (= id (-> error ex-data :database-id))))))))
 
-(deftest ^:integration resolve-by-id-supports-a-supplied-master-key-id
+(deftest ^:integration resolve-by-id-supports-a-supplied-key-protection-id
   (with-system [system (run {:keys [:duct.database/sql :duct.migrator/ragtime]})]
     (let [datasource (:duct.database.sql/hikaricp system)
-          master-key (crypto/keychain "test-master-key" (tempel/keychain))
+          key-protection (crypto/open {:key-id "test-key-protection"})
           {:keys [database-id vault-id]}
           (postgres-data/create-database! {:datasource datasource
-                                           :master-key master-key})
+                                           :key-protection key-protection})
           resolved (jdbc/with-transaction [tx datasource {:read-only true}]
-                     (database/resolve-by-id tx {:master-key master-key
+                     (database/resolve-by-id tx {:key-protection key-protection
                                                  :actor "actor-1"
                                                  :permission :pull
                                                  :database-id database-id}))]
@@ -68,15 +67,15 @@
       (doseq [[configured expected]
               [[nil {:reason ::vault/master-key-not-configured
                      :master-key-id "dev-ephemeral"}]
-               [(crypto/keychain "another-key" (tempel/keychain))
+               [(crypto/open {:key-id "another-key"})
                 {:reason ::vault/master-key-not-configured
                  :master-key-id "dev-ephemeral"}]
-               [(crypto/keychain "dev-ephemeral" (tempel/keychain))
+               [(crypto/open {:key-id "dev-ephemeral"})
                 {:reason ::vault/vault-decryption-failed
                  :vault-id vault-id}]]]
         (let [error (try
                       (jdbc/with-transaction [tx datasource {:read-only true}]
-                        (database/resolve-by-id tx {:master-key configured
+                        (database/resolve-by-id tx {:key-protection configured
                                                     :actor "actor-1"
                                                     :permission :pull
                                                     :database-id database-id}))

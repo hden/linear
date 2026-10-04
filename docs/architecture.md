@@ -85,6 +85,29 @@ An entry point accepts the context as a map. Malli instrumentation validates a
 capability at the narrower domain-function boundary where that capability is
 used. Schemas that have no reuse requirement remain inline.
 
+## Cryptographic resources and capabilities
+
+Only resources with application-lifetime state become lifecycle components.
+Functions, configuration values, and capability projections are not separate
+components. Duct assembles them around the resource that owns their state.
+
+`:linear.adapter.crypto/key-service` owns the cryptographic resource. The
+application context stores it once under `:linear.usecase.core/key-service`.
+The use-case accessors project `KeyGenerator` and `KeyProtection` separately;
+the Vault use-case composes data-key generation, wrapping, and persistence.
+`Keychain` provides only byte encryption and decryption for resolved data keys.
+Data keys are Vault values, not application lifecycle components.
+
+Deployment target selection is adapter configuration. The local provider owns an
+ephemeral KEK; the remote provider owns and closes its SDK client. SDK objects,
+provider names, and Tempel representations do not appear in the capability
+contracts or application context. Shared data-key mechanisms live in
+`linear.adapter.crypto.core`; providers depend inward on those mechanisms.
+
+The configured protection key is already available as a capability. Vault
+checks its ID directly against `encrypted-by`; no retriever fetches an already
+injected value. Labrador remains responsible for retrieving stored Vault facts.
+
 ## Transactions and retries
 
 A use-case decides where a transaction starts and ends, whether it is read-only,
@@ -103,7 +126,7 @@ capabilities belong to use-cases.
 Vault retrieval is composed as:
 
 ```text
-require pull grant -> raw vault -> configured master key -> unwrap keychain
+require pull grant -> raw vault -> check protection key ID -> unwrap keychain
 ```
 
 Database retrieval is composed in one PostgreSQL transaction as:
@@ -114,8 +137,8 @@ raw database -> require grant for its vault ID -> composed vault
 
 Normal sync retrieval joins current attributes and excludes tombstones;
 missing and closed identities both produce `database-not-found`. Management
-retrieval includes tombstones. Vault composition resolves the configured
-master key and decrypts the data key before sync uses the database. See
+retrieval includes tombstones. Vault composition checks the configured
+protection key ID and unwraps the data key before sync uses the database. See
 [database lifecycle](database-lifecycle.md) for closure and recovery semantics.
 
 The Labrador tags are stable internal contracts. Composition must not be moved
@@ -170,8 +193,8 @@ Peer capability implementations do not depend on one another. The Integrant
 hierarchy derives the concrete `:duct.database.sql/hikaricp` key from the
 abstract `:linear.adapter.postgres/datasource` key. Duct configuration refers
 to the abstract key, so no identity component exists solely to rename Hikari.
-SQLite, SlateDB, and crypto adapters are loaded by their existing concrete
-lifecycle keys.
+SQLite and SlateDB adapters are loaded by their concrete lifecycle keys.
+Crypto implementation selection belongs to its technology root.
 
 ## Use-case boundaries and names
 
@@ -203,32 +226,62 @@ status codes and wire formats.
 
 ## Enforcement
 
-Run `bb architecture` to discover `src` with tools.namespace, check its
-dependency graph, require every discovered namespace, and run the separate
-clj-kondo var-usage checker. Run `bb architecture:test` to verify representative
-structural rules, cycles, forbidden vars, and stable diagnostics. These checker
-tests live under `scripts` and are intentionally excluded from the application
-test classpath and `bb test` suite.
+`bb lint` enforces static source constraints: source policies, architectural
+rules, public API rules, and ordinary clj-kondo findings. It does not load
+application namespaces. `bb architecture` and `bb policy:check` remain focused
+commands for dependency rules and source policies respectively.
 
-The harness checks:
+Policy checks inspect `src`, `test`, `scripts`, and `.clj-kondo/hooks` with fixed
+analysis settings. Global Var replacement has no exceptions. Dynamic code and
+name resolution require an exact calling var, target, and reason in the checker;
+there are currently no approved dynamic references. Namespace-wide exemptions
+and inline lint suppression are forbidden. Missing sources, parse failures,
+and missing analysis are errors. Repository lint configuration cannot disable
+these policies.
+
+Dependency checks discover every source namespace and combine namespace
+imports with resolved Var references, including fully qualified calls. Unknown
+source roles are denied. The checks cover:
 
 - layer and adapter-technology dependency direction;
 - dependency cycles;
 - cross-technology adapter dependencies;
 - outward dependencies from adapter `core` namespaces;
-- `lab/fetch` inside adapters;
-- `defretriever` inside use-cases; and
-- loadability of every discovered source namespace.
+- `lab/fetch` inside adapters; and
+- `defretriever` inside use-cases.
 
-Diagnostics have the stable form:
+`bb lint` runs one JVM. Policy and dependency checks share one fixed-configuration
+analysis; ordinary lint uses a separate analysis with the repository's lint
+configuration and hooks. Both analyses ignore home-directory configuration and
+clj-kondo caches. Static tooling uses its own dependencies rather than the
+application's runtime classpath.
+
+The Stop hook runs `bb lint` through the Compose `lint` service. This service
+uses the prepared development image with no network, database dependency, or
+mutable development dependency volumes. Prepare tooling with
+`docker compose build app`. The static tasks invoke the Clojure CLI already
+installed in the image; they do not bootstrap Babashka's separate Clojure CLI.
+Violations and incomplete checks block completion. Repeated Stop events do not
+bypass the checks.
+
+CI runs `bb verify`: `lint`, `check`, `format:check`, and the complete application
+test suite. `bb check` loads the namespaces discovered under `src` with
+reflection warnings enabled. E2E, coverage, and CRAP remain separate CI steps.
+
+Scripts must not contain tests, and tests must not target verification, lint,
+architecture, setup scripts, or hooks, regardless of placement. The policy
+checker rejects script test files, test dependencies on script namespaces, and
+references to script or hook paths in application tests. Run verification
+scripts against the actual repository instead.
+
+Policy and dependency diagnostics have the stable form:
 
 ```text
-file:line: from -> to: rule
+file:line: rule: from -> to: message
 ```
 
-See [testing.md](testing.md) for the test placement rules, integration-test
-metadata, and the distinction between the instrumented `bb test` suite and
-the `clojure.test` coverage runner.
+See [testing.md](testing.md) for application test boundaries and validation
+commands.
 
 ## Influences
 

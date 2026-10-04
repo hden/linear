@@ -14,7 +14,7 @@
 
 (defn- fake-keychain [secret]
   (reify keychain/Keychain
-    (-id [_] secret)
+
     (-encrypt [_ plaintext options]
       (cbor/encode {:secret secret
                     :options (normalize-options options)

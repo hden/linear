@@ -76,7 +76,7 @@
           (let [id (:id (parse-json created))
                 path (str "/control/v1/databases/" id)
                 ctx {::core/database (:duct.database.sql/hikaricp system)
-                     ::core/master-key (:linear.adapter.crypto.tempel/master-key system)
+                     ::core/key-service (:linear.adapter.crypto/key-service system)
                      ::core/revision-store (:linear.adapter.slatedb.store/store system)
                      ::core/evaluator (:linear.adapter.sqlite.evaluator/evaluator system)}
                 root (database/pull ctx {:actor actor :database-id id})]
@@ -118,7 +118,7 @@
             datasource (:duct.database.sql/hikaricp system)
             {:keys [database-id vault-id keychain]}
             (postgres/create-database! {:datasource datasource :actor owner
-                                        :master-key (:linear.adapter.crypto.tempel/master-key system)})
+                                        :key-protection (:linear.adapter.crypto/key-service system)})
             _ (slatedb-data/store-root!
                 {:store (:linear.adapter.slatedb.store/store system)
                  :database-id database-id :keychain keychain

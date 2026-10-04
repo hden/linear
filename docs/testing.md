@@ -37,7 +37,38 @@ must be isolated from infrastructure. Shared integration setup is in
 argument maps, generate incidental IDs, and return those IDs to callers.
 `sqlite-image` is a fixed fixture and intentionally has no arguments.
 
+Run relevant application tests while changing behavior. The Stop hook checks
+static source constraints with `bb lint`; it does not run application tests.
+`bb verify` is the complete local and CI gate: static lint, source loading,
+formatting, and the full instrumented application suite. E2E and coverage are
+separate commands.
+
 Tests that block work must release it and join any asynchronous tasks during
 cleanup, so a failed assertion cannot leave resources or futures blocked.
 
 See the [CI workflow](../.github/workflows/ci.yml) for automated checks.
+
+## Real-token E2E
+
+Against a running instance configured with your Auth0 issuer and API audience,
+use three distinct actors' RS256 API access tokens. The reader subject must
+match the reader token's `sub`; the ungranted actor must have no grant on the
+new vault. Use disposable storage: the scenario creates vaults and databases.
+
+```sh
+export LINEAR_E2E_MANAGER_TOKEN='<manager API access token>'
+export LINEAR_E2E_READER_TOKEN='<reader API access token>'
+export LINEAR_E2E_READER_SUBJECT='<reader sub>'
+export LINEAR_E2E_UNGRANTED_TOKEN='<ungranted API access token>'
+export LINEAR_URL='http://host.docker.internal:3000'
+docker compose run --rm --no-deps \
+  -e LINEAR_E2E_MANAGER_TOKEN -e LINEAR_E2E_READER_TOKEN \
+  -e LINEAR_E2E_READER_SUBJECT -e LINEAR_E2E_UNGRANTED_TOKEN \
+  app sh -c 'npm ci --omit=dev && npm run e2e -- "$1"' sh "$LINEAR_URL"
+```
+
+Run from this repository's development Compose environment. Set `LINEAR_URL`
+to an address reachable from the client container (for example,
+`http://host.docker.internal:3000` for a service on a Docker Desktop host, or
+`http://app:3000` for the development Compose app). This command runs the SDK
+against that instance; `bb e2e` instead starts the local JWT fixture and app.

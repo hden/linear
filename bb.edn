@@ -3,16 +3,25 @@
         :task (apply clojure "-M:duct" "--main" *command-line-args*)}
   test {:doc "Runs the test suite"
         :task (apply clojure "-M:duct:test" "--test" *command-line-args*)}
-  lint {:doc "Runs clj-kondo"
-        :task (apply clojure "-M:lint" "--lint" "src" "test" "scripts" *command-line-args*)}
+  policy:check {:doc "Checks non-suppressible source policies"
+                :task (shell "clojure" "-M:policy")}
+  lint {:doc "Checks source policies, architectural dependencies, public APIs, and clj-kondo findings without loading application code"
+        :task (do
+                (when (seq *command-line-args*)
+                  (throw (ex-info "lint does not accept command-line arguments" {})))
+                (shell "clojure" "-M:lint"))}
   architecture {:doc "Checks architectural dependency rules"
-                :task (clojure "-M:architecture")}
-  architecture:test {:doc "Tests the architecture checker"
-                     :task (clojure "-M:architecture-test")}
-  check {:doc "Checks for reflection warnings"
+                :task (shell "clojure" "-M:architecture")}
+  verify {:doc "Requires all static checks and application tests to pass"
+          :task (do
+                  (when (seq *command-line-args*)
+                    (throw (ex-info "verify does not accept skip options" {})))
+                  (doseq [task '[lint check format:check test]]
+                    (run task)))}
+  check {:doc "Loads source namespaces with reflection warnings enabled"
          :task (apply clojure "-M:check" *command-line-args*)}
   format:check {:doc "Checks Standard Clojure Style formatting"
-                :task (apply shell "standard-clj" "check" "src" "test" "scripts" *command-line-args*)}
+                :task (apply shell "standard-clj" "check" "src" "test" "scripts" "deps.edn" "duct.edn" "bb.edn" *command-line-args*)}
   format:fix {:doc "Formats Clojure and EDN files"
               :task (apply shell "standard-clj" "fix" "src" "test" "scripts" "deps.edn" "duct.edn" "bb.edn"
                            *command-line-args*)}

@@ -1,12 +1,12 @@
 (ns linear.usecase.core)
 
-(defn keychain
-  [{keychain-factory ::keychain}]
-  (keychain-factory))
+(defn key-generator
+  [{::keys [key-service]}]
+  key-service)
 
-(defn master-key
-  [{::keys [master-key]}]
-  master-key)
+(defn key-protection
+  [{::keys [key-service]}]
+  key-service)
 
 (defn transactable
   [{::keys [database]}]

@@ -1,0 +1,171 @@
+name: Release image
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      revision: ${{ steps.revision.outputs.revision }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: revision
+        run: echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - id: version
+        name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        shell: bash
+        run: |
+          node <<'JS'
+          const fs = require('node:fs');
+          const tag = process.env.RELEASE_TAG;
+          const match = /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/.exec(tag);
+          if (!match || (match[4] && match[4].split('.').some(x => /^0[0-9]+$/.test(x))) || tag.length > 129) {
+            throw new Error('Expected vMAJOR.MINOR.PATCH[-PRERELEASE], without build metadata');
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${tag.slice(1)}\n`);
+          JS
+
+  verify:
+    needs: prepare
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.prepare.outputs.revision }}
+    permissions:
+      contents: read
+      id-token: write
+
+  build:
+    needs: [prepare, verify]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image for verification
+        id: image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: linear-release:test
+          provenance: false
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.version }}
+            REVISION=${{ needs.prepare.outputs.revision }}
+      - name: Start PostgreSQL
+        run: docker compose up --detach --wait postgres
+      - name: Test packaged application with Turso SDK
+        shell: bash
+        run: |
+          docker run --rm --network host \
+            -e 'JDBC_DATABASE_URL=jdbc:postgresql://localhost:5432/linear?user=postgres&password=postgres' \
+            -e SLATEDB_OBJECT_STORE_URL=memory:/// \
+            --mount type=bind,src="$PWD/test",dst=/workspace/test,readonly \
+            --mount type=bind,src="$PWD/package.json",dst=/workspace/package.json,readonly \
+            --mount type=bind,src="$PWD/package-lock.json",dst=/workspace/package-lock.json,readonly \
+            linear-release:test sh -c 'clojure -M:duct --main --keys :duct.migrator/ragtime && npm ci --omit=dev && bb e2e'
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push verified image by digest
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,name=ghcr.io/hden/linear,push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.version }}
+            REVISION=${{ needs.prepare.outputs.revision }}
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          TESTED_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          test "$DIGEST" = "$TESTED_DIGEST"
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Clean up
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish version manifest
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        shell: bash
+        run: |
+          digests=(*)
+          test "${#digests[@]}" -eq 2
+          sources=()
+          for digest in "${digests[@]}"; do
+            sources+=("ghcr.io/hden/linear@sha256:$digest")
+          done
+          docker buildx imagetools create --tag "ghcr.io/hden/linear:$VERSION" "${sources[@]}"
+          docker buildx imagetools inspect "ghcr.io/hden/linear:$VERSION" | tee manifest.txt
+          {
+            echo "### ghcr.io/hden/linear:$VERSION"
+            echo '```text'
+            cat manifest.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

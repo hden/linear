@@ -24,7 +24,8 @@ WORKDIR /tmp/deps
 
 COPY deps.edn .
 
-RUN clojure -P \
+RUN clojure -P -M:lint \
+ && clojure -P \
  && case "$TARGETARCH" in \
       amd64) slatedb_platform=linux-x86-64 ;; \
       arm64) slatedb_platform=linux-aarch64 ;; \
@@ -41,3 +42,18 @@ RUN clojure -P \
 ENV JAVA_TOOL_OPTIONS="--enable-native-access=ALL-UNNAMED -Djava.library.path=/usr/local/lib"
 
 WORKDIR /workspace
+
+COPY LICENSE /usr/share/licenses/linear/LICENSE
+COPY deps.edn bb.edn duct.edn migrations.edn ./
+COPY src ./src
+COPY resources ./resources
+
+ARG VERSION=dev
+ARG REVISION=unknown
+
+LABEL org.opencontainers.image.source="https://github.com/hden/linear" \
+      org.opencontainers.image.version="$VERSION" \
+      org.opencontainers.image.revision="$REVISION" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
+CMD ["clojure", "-M:duct", "--main"]

@@ -12,8 +12,7 @@
  {:linear/public-api
   {:level :error
    :exceptions
-   {[linear.adapter.crypto.tempel/keychain 2] "Attaches an identifier to a keychain value."
-    [linear.adapter.slatedb.ffi/open-database! 2] "Matches the SlateDB native API argument order."
+   {[linear.adapter.slatedb.ffi/open-database! 2] "Matches the SlateDB native API argument order."
     [linear.adapter.slatedb.ffi/read-snapshot-values 2] "Matches the SlateDB native API argument order."
     [linear.adapter.slatedb.ffi/read-transaction-values 2] "Matches the SlateDB native API argument order."
     [linear.adapter.slatedb.ffi/write-values 2] "Matches the SlateDB native API argument order."
@@ -36,7 +35,5 @@
     [linear.adapter.sqlite.protocol/write 3] "Matches SQLite File write offset and bytes."
     [linear.adapter.sqlite.wal/read 3] "Matches SQLite WAL read offset and length."
     [linear.adapter.sqlite.wal/truncate 2] "Matches SQLite WAL truncate length."
-    [linear.architecture-test/-main [:variadic 0]] "Existing command-line entry point."
-    [linear.architecture/-main [:variadic 0]] "Existing command-line entry point."
     [linear.spec/valid? 2] "Tests a value against a schema."
     [linear.usecase.database.revisions/as-of 2] "Selects a snapshot by revision value."}}}}

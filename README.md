@@ -1,5 +1,17 @@
 # Linear
 
+Linear is an Apache-2.0 service for authenticated Turso SDK synchronization.
+Release images are published at `ghcr.io/hden/linear` for `linux/amd64` and
+`linux/arm64`. Pin a published version (for example, after the first release):
+
+```sh
+docker pull ghcr.io/hden/linear:0.1.0
+```
+
+See the [deployment guide](docs/deployment.md) to connect your own Auth0,
+PostgreSQL, GCP KMS, and GCS resources. See [release maintenance](docs/releases.md)
+for publishing images. The source is licensed under [Apache-2.0](LICENSE).
+
 ## Documentation
 
 - [Architecture](docs/architecture.md): dependency direction and capability boundaries.
@@ -30,13 +42,35 @@ sh scripts/init.sh
 ```
 
 Then copy `.env.example` to `.env` and run `direnv allow` in the repository.
-The checked-in `.envrc` loads `.env` and makes `JAVA_TOOL_OPTIONS` available to
-Clojure commands. Include the repository directory for
-`libslatedb_uniffi.dylib` and the Homebrew SQLite library directory in
-`-Djava.library.path`.
+The checked-in `.envrc` loads `.env` and configures `JAVA_TOOL_OPTIONS` with
+the repository and SQLite library directories for host Clojure commands.
 
 The development container provides both native libraries under
-`/usr/local/lib` and sets the JVM library path in `Dockerfile.dev`.
+`/usr/local/lib` and sets the JVM library path in `Dockerfile`.
+
+## Deployment target
+
+One `duct.edn` and one Docker image serve every deployment target.
+`LINEAR_DEPLOYMENT_TARGET` defaults to `dev`, which uses an ephemeral Tempel
+KEK regenerated on startup. Set it to `gcp` to use GCP KMS. All other values,
+including `aws`, fail at startup. JDBC and SlateDB remain independently
+configured through their existing environment variables.
+
+For local development, load `.env` with direnv and run:
+
+```sh
+docker compose up --build app
+```
+
+Compose forwards the deployment target, KMS key name, and OIDC settings.
+Use the same Duct commands for configuration inspection and REPL work:
+
+```sh
+docker compose run --rm app clojure -M:duct --show --main
+docker compose run --rm app bb repl
+```
+
+For persistent GCP deployments, follow the [deployment guide](docs/deployment.md).
 
 ## Authentication
 

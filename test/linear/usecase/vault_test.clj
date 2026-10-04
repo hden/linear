@@ -9,39 +9,18 @@
    [linear.adapter.postgres.core :as postgres]
    [linear.test :refer [run]]
    [linear.usecase.core :as core]
-   [linear.usecase.database.evaluator :as evaluator]
-   [linear.usecase.database.revisions :as revisions]
    [linear.usecase.grant :as grant]
-   [linear.usecase.healthcheck :as healthcheck]
    [linear.usecase.keychain :as keychain]
    [linear.usecase.transaction :as transaction]
    [linear.usecase.vault :as vault]
-   [next.jdbc :as jdbc]
-   [taoensso.tempel :as tempel])
+   [next.jdbc :as jdbc])
   (:import
    (java.util.concurrent CountDownLatch TimeUnit)))
 
-(defn- checkable-evaluator []
-  (reify
-    healthcheck/Checkable
-    (-ready? [_] true)
-    (-ok? [_] true)
-    evaluator/Evaluator
-    (-evaluate [_ _] nil)))
-
-(defn- database-store []
-  (reify
-    revisions/ConsistentReadable
-    (-read-consistently [_ f _] (f nil))
-    revisions/RevisionWritable
-    (-publish-next! [_ revision _] revision)))
-
 (defn- context [datasource]
   {::core/database       datasource
-   ::core/evaluator      (checkable-evaluator)
-   ::core/revision-store (database-store)
-   ::core/keychain       crypto/new-keychain
-   ::core/master-key     (crypto/keychain "dev-ephemeral" (tempel/keychain))})
+
+   ::core/key-service     (crypto/open {:key-id "dev-ephemeral"})})
 
 (defn- row-count [datasource table where]
   (postgres/query datasource {:statement {:select [[[:count :*] :count]]
@@ -106,7 +85,7 @@
                             ["SELECT ciphertext, encrypted_by FROM vaults WHERE id = ?"
                              (:id vault)]))]
         (is (bytes? (:vaults/ciphertext stored)))
-        (is (= (keychain/id (core/master-key context))
+        (is (= (keychain/id (core/key-protection context))
                (:vaults/encrypted_by stored))))
       (is (every? (comp keychain/keychain? :keychain) (vals fetched))))))
 
@@ -253,7 +232,7 @@
                                             :data [{}]
                                             :idempotency-key (str (random-uuid))}))
           denied     (try
-                       (vault/get-by-ids (assoc context ::core/master-key nil)
+                       (vault/get-by-ids (assoc context ::core/key-service nil)
                                          {:actor "actor-2" :ids [id]})
                        nil
                        (catch clojure.lang.ExceptionInfo error error))]
@@ -374,7 +353,7 @@
                         (catch clojure.lang.ExceptionInfo error (ex-data error)))]
           (is (= ::anomaly/incorrect (::anomaly/category data)))
           (is (= :deleted (:state (state-fn ctx args))))))
-      (let [data (try (restore-fn (assoc ctx ::core/master-key nil)
+      (let [data (try (restore-fn (assoc ctx ::core/key-service nil)
                         (assoc args :token (encode original)))
                       (catch clojure.lang.ExceptionInfo error (ex-data error)))]
         (is (= ::vault/master-key-not-configured (:reason data)))
