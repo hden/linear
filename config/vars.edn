@@ -1,0 +1,17 @@
+{port                     {:env "PORT"
+                           :type :int
+                           :default 3000}
+ jdbc-url                 {:env "JDBC_DATABASE_URL"
+                           :default "jdbc:postgresql://localhost:5432/linear?user=postgres&password=postgres"}
+ slatedb-object-store-url {:env "SLATEDB_OBJECT_STORE_URL"
+                           :default "memory:///"}
+ slatedb-max-open-databases {:env "SLATEDB_MAX_OPEN_DATABASES"
+                             :type :int
+                             :default 128}
+ sqlite-vfs-name          {:env "SQLITE_VFS_NAME"
+                           :default "linear-sqlite"}
+ gcp-kms-key-name         {:env "GCP_KMS_KEY_NAME"}
+ oidc-issuer              {:env "OIDC_ISSUER"}
+ oidc-audience            {:env "OIDC_AUDIENCE"}
+ oidc-jwks-url            {:env "OIDC_JWKS_URL"
+                           :default nil}}

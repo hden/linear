@@ -38,6 +38,38 @@ Clojure commands. Include the repository directory for
 The development container provides both native libraries under
 `/usr/local/lib` and sets the JVM library path in `Dockerfile.dev`.
 
+## Key encryption key
+
+Local development and CI use an ephemeral Tempel KEK, regenerated on startup.
+For GCP, provide a shared `ENCRYPT_DECRYPT` CryptoKey and
+[ADC](https://docs.cloud.google.com/docs/authentication/application-default-credentials)
+with `roles/cloudkms.cryptoKeyEncrypterDecrypter` on that key:
+
+```sh
+export GCP_KMS_KEY_NAME="projects/my-project/locations/global/keyRings/linear/cryptoKeys/kek"
+docker compose build app
+docker build -f Dockerfile.gcp -t linear-gcp .
+docker run --rm --env-file .env -e GCP_KMS_KEY_NAME linear-gcp
+```
+
+Both configurations use `:linear.adapter.crypto/key-service`; its `:provider`
+selects the implementation. `duct.edn` selects Tempel; `duct.gcp.edn` selects
+GCP KMS. The service owns its KEK or remote client and provides separate key
+generation and key protection capabilities. Both configurations include
+shared variables and Web settings from `config/`. The GCP image installs
+`duct.gcp.edn` as its `duct.edn`; no profile selects the KEK implementation.
+Pass ADC credentials and the environment variables needed by the application
+to the container. If the development image has a different tag, set
+`--build-arg DEV_IMAGE=<tag>` when building the GCP image.
+
+Use standard Duct commands inside either image:
+
+```sh
+docker run --rm --env-file .env -e GCP_KMS_KEY_NAME linear-gcp clojure -M:duct --show
+docker run --rm -it --env-file .env -e GCP_KMS_KEY_NAME linear-gcp clojure -M:duct --repl
+docker compose run --rm app clojure -M:duct --show
+```
+
 ## Authentication
 
 Linear requires an Auth0 API access token for every vault and sync request.

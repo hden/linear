@@ -15,7 +15,7 @@
   {:migrations #duct/include "migrations.edn"}
 
   :linear.adapter.crypto/key-service
-  {:provider :tempel :key-id "dev-ephemeral"}
+  {:provider :gcp-kms :key-id #ig/var gcp-kms-key-name}
 
   :duct.auth.jwks/provider
   {:domain #ig/var oidc-issuer

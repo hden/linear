@@ -19,11 +19,13 @@
                              'duct/resource io/resource}}
                   (slurp file)))
 
-(defn- load-config []
-  (let [file (io/file "duct.edn")]
-    (if (.exists file)
-      (read-config file)
-      {})))
+(defn load-config
+  ([] (load-config {:file "duct.edn"}))
+  ([{:keys [file]}]
+   (let [file (io/file file)]
+     (if (.exists file)
+       (read-config file)
+       {}))))
 
 (defn- resolve-migrations [config]
   (let [path       [:system :duct.module/sql]
