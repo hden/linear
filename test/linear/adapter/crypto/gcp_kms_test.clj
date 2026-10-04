@@ -144,7 +144,10 @@
 
 (deftest invalid-key-names-fail-before-opening-a-key-service
   (doseq [name ["" "invalid" "projects/p/locations/l/keyRings/r"]]
-    (is (thrown? IllegalArgumentException (kms/open {:key-id name})))))
+    (is (thrown? IllegalArgumentException (kms/open {:key-id name})))
+    (is (thrown? IllegalArgumentException
+          (ig/init-key :linear.adapter.crypto/key-service
+                       {:deployment-target "gcp" :gcp-kms-key-name name})))))
 
 (deftest halting-the-key-service-closes-its-owned-client
   (let [closed (atom 0)

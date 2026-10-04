@@ -19,7 +19,7 @@ in the token. Restoration checks the envelope and authenticates the ciphertext
 against the requested vault ID. Invalid, corrupted, unsupported-version, or
 other-vault tokens return 400. Restoration requires the corresponding master
 key to remain available through the injected key protection capability; unavailable keys
-produce a server error. See [KEK configuration](../README.md#key-encryption-key)
+produce a server error. See [KEK configuration](../README.md#deployment-target)
 for GCP KMS. Key rewrapping is not implemented.
 
 An active vault keeps its key on restoration, after validating the token.

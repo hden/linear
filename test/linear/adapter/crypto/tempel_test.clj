@@ -10,7 +10,7 @@
 
 (deftest wrapping-and-unwrapping-a-vault-key-retains-access-to-encrypted-data
   (with-open [service (ig/init-key :linear.adapter.crypto/key-service
-                        {:provider :tempel :key-id "dev-ephemeral"})]
+                        {:deployment-target "dev"})]
     (let [data-key (keychain/generate service)
           options {:associated-data (.getBytes "v-primary" "UTF-8")}
           ciphertext (keychain/wrap service (assoc options :keychain data-key))
@@ -46,3 +46,9 @@
   (with-open [service (crypto/open {:key-id "master"})]
     (is (nil? (keychain/unwrap service
                 {:ciphertext (tempel/encrypt-with-symmetric-key (.getBytes "not a key" "UTF-8") (tempel/keychain))})))))
+
+(deftest unsupported-deployment-targets-fail
+  (doseq [target ["aws" "unknown" ""]]
+    (is (thrown? IllegalArgumentException
+          (ig/init-key :linear.adapter.crypto/key-service
+                       {:deployment-target target})))))

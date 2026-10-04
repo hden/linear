@@ -20,13 +20,19 @@ services:
     init: true
     build:
       context: .
-      dockerfile: Dockerfile.dev
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       JDBC_DATABASE_URL: jdbc:postgresql://postgres:5432/linear?user=postgres&password=postgres
       SLATEDB_OBJECT_STORE_URL: memory:///
+      LINEAR_DEPLOYMENT_TARGET:
+      GCP_KMS_KEY_NAME:
+      OIDC_ISSUER:
+      OIDC_AUDIENCE:
+      OIDC_JWKS_URL:
+    ports:
+      - "3000:3000"
     volumes:
       - .:/workspace
       - clojure-m2:/root/.m2

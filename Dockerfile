@@ -42,3 +42,9 @@ RUN clojure -P -M:lint \
 ENV JAVA_TOOL_OPTIONS="--enable-native-access=ALL-UNNAMED -Djava.library.path=/usr/local/lib"
 
 WORKDIR /workspace
+
+COPY deps.edn bb.edn duct.edn migrations.edn ./
+COPY src ./src
+COPY resources ./resources
+
+CMD ["clojure", "-M:duct", "--main"]

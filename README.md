@@ -30,45 +30,60 @@ sh scripts/init.sh
 ```
 
 Then copy `.env.example` to `.env` and run `direnv allow` in the repository.
-The checked-in `.envrc` loads `.env` and makes `JAVA_TOOL_OPTIONS` available to
-Clojure commands. Include the repository directory for
-`libslatedb_uniffi.dylib` and the Homebrew SQLite library directory in
-`-Djava.library.path`.
+The checked-in `.envrc` loads `.env` and configures `JAVA_TOOL_OPTIONS` with
+the repository and SQLite library directories for host Clojure commands.
 
 The development container provides both native libraries under
-`/usr/local/lib` and sets the JVM library path in `Dockerfile.dev`.
+`/usr/local/lib` and sets the JVM library path in `Dockerfile`.
 
-## Key encryption key
+## Deployment target
 
-Local development and CI use an ephemeral Tempel KEK, regenerated on startup.
-For GCP, provide a shared `ENCRYPT_DECRYPT` CryptoKey and
-[ADC](https://docs.cloud.google.com/docs/authentication/application-default-credentials)
-with `roles/cloudkms.cryptoKeyEncrypterDecrypter` on that key:
+One `duct.edn` and one Docker image serve every deployment target.
+`LINEAR_DEPLOYMENT_TARGET` defaults to `dev`, which uses an ephemeral Tempel
+KEK regenerated on startup. Set it to `gcp` to use GCP KMS. All other values,
+including `aws`, fail at startup. JDBC and SlateDB remain independently
+configured through their existing environment variables.
+
+For local development, load `.env` with direnv and run:
+
+```sh
+docker compose up --build app
+```
+
+Compose forwards the deployment target, KMS key name, and OIDC settings.
+Use the same Duct commands for configuration inspection and REPL work:
+
+```sh
+docker compose run --rm app clojure -M:duct --show --main
+docker compose run --rm app bb repl
+```
+
+For GCP, provide `GCP_KMS_KEY_NAME` naming a shared `ENCRYPT_DECRYPT` CryptoKey
+and [ADC](https://docs.cloud.google.com/docs/authentication/application-default-credentials)
+with `roles/cloudkms.cryptoKeyEncrypterDecrypter` on that key. Build the same
+image and pass credentials and application settings at runtime:
 
 ```sh
 export GCP_KMS_KEY_NAME="projects/my-project/locations/global/keyRings/linear/cryptoKeys/kek"
-docker compose build app
-docker build -f Dockerfile.gcp -t linear-gcp .
-docker run --rm --env-file .env -e GCP_KMS_KEY_NAME linear-gcp
+docker build -t linear .
+docker run --rm -p 3000:3000 \
+  -e LINEAR_DEPLOYMENT_TARGET=gcp -e GCP_KMS_KEY_NAME \
+  -e OIDC_ISSUER -e OIDC_AUDIENCE -e OIDC_JWKS_URL \
+  -e JDBC_DATABASE_URL -e SLATEDB_OBJECT_STORE_URL \
+  --mount type=bind,src=/absolute/path/to/adc.json,dst=/run/adc.json,readonly \
+  -e GOOGLE_APPLICATION_CREDENTIALS=/run/adc.json \
+  linear
 ```
 
-Both configurations use `:linear.adapter.crypto/key-service`; its `:provider`
-selects the implementation. `duct.edn` selects Tempel; `duct.gcp.edn` selects
-GCP KMS. The service owns its KEK or remote client and provides separate key
-generation and key protection capabilities. Both configurations include
-shared variables and Web settings from `config/`. The GCP image installs
-`duct.gcp.edn` as its `duct.edn`; no profile selects the KEK implementation.
-Pass ADC credentials and the environment variables needed by the application
-to the container. If the development image has a different tag, set
-`--build-arg DEV_IMAGE=<tag>` when building the GCP image.
+Set `JDBC_DATABASE_URL` and `SLATEDB_OBJECT_STORE_URL` to the deployment's
+storage endpoints. The dev defaults are local PostgreSQL and in-memory
+SlateDB. On GCP infrastructure with an attached service account, ADC can use
+that identity without the credential file mount.
 
-Use standard Duct commands inside either image:
-
-```sh
-docker run --rm --env-file .env -e GCP_KMS_KEY_NAME linear-gcp clojure -M:duct --show
-docker run --rm -it --env-file .env -e GCP_KMS_KEY_NAME linear-gcp clojure -M:duct --repl
-docker compose run --rm app clojure -M:duct --show
-```
+Append `clojure -M:duct --show --main` to the same `docker run` command to
+inspect configuration. For a REPL, add `-it` and append `bb repl`. The service owns its KEK
+or SDK client and exposes the same key generation and protection capabilities
+for both targets.
 
 ## Authentication
 

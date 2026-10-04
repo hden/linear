@@ -21,9 +21,9 @@
   check {:doc "Loads source namespaces with reflection warnings enabled"
          :task (apply clojure "-M:check" *command-line-args*)}
   format:check {:doc "Checks Standard Clojure Style formatting"
-                :task (apply shell "standard-clj" "check" "src" "test" "scripts" *command-line-args*)}
+                :task (apply shell "standard-clj" "check" "src" "test" "scripts" "deps.edn" "duct.edn" "bb.edn" *command-line-args*)}
   format:fix {:doc "Formats Clojure and EDN files"
-              :task (apply shell "standard-clj" "fix" "src" "test" "scripts" "deps.edn" "duct.edn" "duct.gcp.edn" "config" "bb.edn"
+              :task (apply shell "standard-clj" "fix" "src" "test" "scripts" "deps.edn" "duct.edn" "bb.edn"
                            *command-line-args*)}
   coverage {:doc "Runs Cloverage and writes LCOV data"
             :task (apply clojure "-M:cov" *command-line-args*)}
