@@ -1,13 +1,12 @@
 (ns linear.adapter.slatedb.snapshot-test
   (:require
    [clojure.test :refer [deftest is]]
-   [linear.adapter.crypto.tempel :as crypto]
+   [linear.adapter.crypto.core :as crypto-core]
    [linear.adapter.slatedb.codec :as codec]
    [linear.adapter.slatedb.ffi :as ffi]
    [linear.adapter.slatedb.key :as key]
    [linear.adapter.slatedb.snapshot :as snapshot]
-   [linear.usecase.database.revisions :as revisions]
-   [taoensso.tempel :as tempel])
+   [linear.usecase.database.revisions :as revisions])
   (:import
    (java.util Arrays UUID)))
 
@@ -24,7 +23,7 @@
      [(key/page 2) (codec/encode-page keychain {:record-key (key/page 2) :page (get-in revision [:pages 2])})]]))
 
 (defn- with-seeded-snapshot [f]
-  (let [keychain (crypto/keychain (tempel/keychain))
+  (let [keychain (crypto-core/new-keychain)
         object-store (ffi/open-object-store "memory:///")
         database (ffi/open-database! object-store (str "d-" (UUID/randomUUID)))]
     (try
@@ -63,7 +62,7 @@
         (is (= "r-01K002" (snapshot/head-revision-id read-values)))))))
 
 (deftest ^:integration consistent-view-reconstructs-an-as-of-snapshot-and-changes-since-it
-  (let [keychain  (crypto/keychain (tempel/keychain))
+  (let [keychain  (crypto-core/new-keychain)
         object-store (ffi/open-object-store "memory:///")
         database  (ffi/open-database! object-store (str "d-" (UUID/randomUUID)))
         root      {:revision-id         "r-root"
@@ -118,7 +117,7 @@
         (ffi/close-object-store! object-store)))))
 
 (deftest as-of-rejects-a-revision-with-an-incomplete-page-state
-  (let [keychain    (crypto/keychain (tempel/keychain))
+  (let [keychain    (crypto-core/new-keychain)
         revision    {:revision-id         "r-incomplete"
                      :parent              nil
                      :database-page-count 2
@@ -136,7 +135,7 @@
         (is (= "Revision does not contain page state" (.getMessage error)))))))
 
 (deftest revision-chain-cycles-are-rejected
-  (let [keychain     (crypto/keychain (tempel/keychain))
+  (let [keychain     (crypto-core/new-keychain)
         revisions    [{:revision-id "r-cycle-a" :parent "r-cycle-b"
                        :database-page-count 1 :pages {}}
                       {:revision-id "r-cycle-b" :parent "r-cycle-a"
@@ -157,7 +156,7 @@
         (is (= "Revision chain contains a cycle" (.getMessage error)))))))
 
 (deftest missing-revisions-and-invalid-cursors-retain-their-domain-reasons
-  (let [keychain    (crypto/keychain (tempel/keychain))
+  (let [keychain    (crypto-core/new-keychain)
         revision    {:revision-id "r-head"
                      :parent nil
                      :database-page-count 1

@@ -3,7 +3,6 @@
    [clojure.test :refer [deftest is]]
    [cognitect.anomalies :as anomaly]
    [duct.test :refer [with-system]]
-   [linear.adapter.crypto.tempel :as crypto]
    [linear.adapter.postgres]
    [linear.adapter.slatedb.store]
    [linear.adapter.sqlite.evaluator]
@@ -21,14 +20,13 @@
 (def ^:private components
   [:duct.database/sql :duct.migrator/ragtime
    :linear.adapter.slatedb.store/store :linear.adapter.sqlite.evaluator/evaluator
-   :linear.adapter.crypto.tempel/master-key])
+   :linear.adapter.crypto/key-service])
 
 (defn- context [system]
   {::core/database (:duct.database.sql/hikaricp system)
    ::core/revision-store (:linear.adapter.slatedb.store/store system)
    ::core/evaluator (:linear.adapter.sqlite.evaluator/evaluator system)
-   ::core/master-key (:linear.adapter.crypto.tempel/master-key system)
-   ::core/keychain crypto/new-keychain})
+   ::core/key-service (:linear.adapter.crypto/key-service system)})
 
 (defn- new-vault [ctx actor]
   (first (vault/create! ctx {:actor actor :data [{}] :idempotency-key (str (random-uuid))})))
@@ -112,7 +110,7 @@
         (is (= ::anomaly/conflict (::anomaly/category (catch-ex-data #(database/create! ctx (assoc args :idempotency-key key)))))))
       (database/close! ctx {:actor "manager" :database-id id})
       (grant/revoke-grant! ctx {:actor "manager" :vault-id vault-id :subject "manager"})
-      (is (= id (database/create! (dissoc ctx ::core/evaluator ::core/revision-store ::core/master-key) args)))
+      (is (= id (database/create! (dissoc ctx ::core/evaluator ::core/revision-store ::core/key-service) args)))
       (is (= ::anomaly/forbidden (::anomaly/category (catch-ex-data #(database/get-by-id ctx {:actor "manager" :database-id id}))))))))
 
 (deftest ^:integration lifecycle-permissions-do-not-require-vault-decryption
@@ -130,7 +128,7 @@
                              #(database/close! ctx {:actor actor :database-id id})]]
             (is (= ::anomaly/forbidden (::anomaly/category (catch-ex-data operation)))))))
       (vault/delete! ctx {:actor "manager" :vault-id vault-id})
-      (is (= :active (:state (database/get-by-id (dissoc ctx ::core/master-key) args))))
+      (is (= :active (:state (database/get-by-id (dissoc ctx ::core/key-service) args))))
       (database/update-attributes! ctx (assoc args :display-name "Still visible"))
       (is (= ::anomaly/conflict (::anomaly/category (catch-ex-data #(database/create! ctx (create-args vault-id))))))
       (database/close! ctx args)

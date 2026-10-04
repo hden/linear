@@ -12,8 +12,7 @@
  {:linear/public-api
   {:level :error
    :exceptions
-   {[linear.adapter.crypto.tempel/keychain 2] "Attaches an identifier to a keychain value."
-    [linear.adapter.slatedb.ffi/open-database! 2] "Matches the SlateDB native API argument order."
+   {[linear.adapter.slatedb.ffi/open-database! 2] "Matches the SlateDB native API argument order."
     [linear.adapter.slatedb.ffi/read-snapshot-values 2] "Matches the SlateDB native API argument order."
     [linear.adapter.slatedb.ffi/read-transaction-values 2] "Matches the SlateDB native API argument order."
     [linear.adapter.slatedb.ffi/write-values 2] "Matches the SlateDB native API argument order."

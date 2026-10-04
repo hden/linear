@@ -1,73 +1,127 @@
 (ns linear.handler.vault-test
   (:require
-   [clojure.test :refer [deftest is]]
-   [duct.test :refer [with-system]]
+   [boring.core :as cbor]
+   [clojure.test :refer [deftest is testing]]
+   [cognitect.anomalies :as anomaly]
+   [linear.adapter.crypto.core :as crypto-core]
    [linear.adapter.crypto.tempel :as crypto]
-   [linear.adapter.postgres]
    [linear.handler.vault :as handler]
-   [linear.test :refer [run]]
+   [linear.test-data.tempel :as tempel-data]
+   [linear.test-data.vault :as data]
    [linear.usecase.core :as core]
-   [linear.usecase.transaction :as transaction]
-   [ring.mock.request :refer [header request]]
-   [taoensso.tempel :as tempel]))
+   [linear.usecase.keychain :as keychain]
+   [taoensso.tempel :as tempel])
+  (:import
+   (java.util Base64)))
 
-(defn- vault-context [{:keys [database]}]
-  {::core/database   database
-   ::core/keychain   crypto/new-keychain
-   ::core/master-key (crypto/keychain "dev-ephemeral" (tempel/keychain))})
+(def ^:private request
+  {:identity {:sub "owner"} :path-params {:id "v-test"}})
 
-(defn- actor-request [request]
-  (assoc request :identity {:sub "auth0|vault-handler"}))
+(deftest creating-a-vault-returns-its-id-and-grants-the-request-actor-manage-permission
+  (let [{:keys [context calls]} (data/fixture {})
+        response ((handler/create context) (assoc request :headers {"idempotency-key" "request-key"}))
+        [creation] (data/calls-for calls {:operation :create})
+        [vault] (:data creation)]
+    (is (= {:status 201 :body {:id (:id vault)}} response))
+    (is (string? (:id vault)))
+    (is (= "owner" (:actor creation)))
+    (is (= "request-key" (:idempotency-key creation)))
+    (is (= 1 (count (:data creation))))
+    (is (= "master" (:encrypted-by vault)))
+    (is (= [{:data [{:vault-id (:id vault) :subject "owner" :permission :manage}]}]
+           (data/calls-for calls {:operation :grants})))))
 
-(deftest create-handler-rejects-a-missing-idempotency-header
-  (is (= 400
-         (:status ((handler/create {})
-                   (actor-request (request :post "/control/v1/vaults")))))))
+(deftest creating-a-vault-requires-a-nonempty-idempotency-header
+  (doseq [header [nil "" 42]]
+    (let [{:keys [context calls]} (data/fixture {})]
+      (is (= {:status 400 :body {:error "Idempotency-Key header is required"}}
+             ((handler/create context) (assoc request :headers {"idempotency-key" header}))))
+      (is (empty? @calls)))))
 
-(deftest ^:integration create-handler-translates-backend-failure-to-500
-  (let [database (reify transaction/Transactable
-                   (-transact [_ _ _]
-                     (throw (ex-info "distinctive backend failure"
-                                     {:cognitect.anomalies/category :cognitect.anomalies/fault}))))
-        response ((handler/create (vault-context {:database database}))
-                  (actor-request
-                    (header (request :post "/control/v1/vaults")
-                            "idempotency-key" "backend-failure")))]
-    (is (= 500 (:status response)))
-    (is (= {:error "distinctive backend failure"} (:body response)))))
+(deftest vault-state-is-returned-as-a-wire-format-string
+  (doseq [[state stored] [["active" {:id "v-test" :encrypted-by "master" :ciphertext (byte-array [1])}]
+                          ["deleted" {:id "v-test"}]]]
+    (testing state
+      (let [{:keys [context calls]} (data/fixture {:stored stored})]
+        (is (= {:status 200 :body {:id "v-test" :state state}} ((handler/get-state context) request)))
+        (is (= [{:actor "owner" :vault-id "v-test" :permission :pull}]
+               (data/calls-for calls {:operation :permission})))
+        (is (= [{:actor "owner" :vault-id "v-test" :lock? false}]
+               (data/calls-for calls {:operation :read})))))))
 
-(deftest ^:integration create-handler-returns-201
-  (with-system [system (run {:keys [:duct.database/sql :duct.migrator/ragtime]})]
-    (let [context  (vault-context {:database (:duct.database.sql/hikaricp system)})
-          create   (handler/create context)
-          request  (actor-request
-                     (header (request :post "/control/v1/vaults")
-                             "idempotency-key" (str "vault-handler-" (random-uuid))))
-          created  (create request)]
-      (is (= 201 (:status created)))
-      (is (string? (get-in created [:body :id]))))))
+(deftest an-exported-recovery-token-restores-a-deleted-vault
+  (let [{:keys [context state]} (data/fixture {})
+        recovery ((handler/recovery-token context) request)]
+    (is (= 200 (:status recovery)))
+    (is (= {"cache-control" "no-store"} (:headers recovery)))
+    (is (string? (get-in recovery [:body :token])))
+    (is (= {:status 204} ((handler/delete context) request)))
+    (is (nil? (:ciphertext @state)))
+    (is (= {:status 204} ((handler/restore context) (assoc request :body-params (:body recovery)))))
+    (is (= [1 2 3] (vec (:ciphertext @state))))
+    (is (= "master" (:encrypted-by @state)))))
 
-(deftest ^:integration lifecycle-handlers-enforce-permissions-and-translate-errors
-  (with-system [system (run {:keys [:duct.database/sql :duct.migrator/ragtime]})]
-    (let [ctx (vault-context {:database (:duct.database.sql/hikaricp system)})
-          id (get-in ((handler/create ctx)
-                      {:identity {:sub "owner"}
-                       :headers {"idempotency-key" (str (random-uuid))}}) [:body :id])
-          req {:identity {:sub "owner"} :path-params {:id id}}
-          state (handler/get-state ctx)
-          token-fn (handler/recovery-token ctx)
-          delete-fn (handler/delete ctx)
-          restore-fn (handler/restore ctx)
-          token (get-in (token-fn req) [:body :token])]
-      (is (= {:id id :state "active"} (:body (state req))))
-      (is (string? token))
-      (doseq [f [state token-fn delete-fn restore-fn]]
-        (is (= 403 (:status (f (assoc req :identity {:sub "outsider"}
-                                 :body-params {:token token}))))))
-      (is (= 204 (:status (delete-fn req))))
-      (is (= "deleted" (get-in (state req) [:body :state])))
-      (is (= 409 (:status (token-fn req))))
-      (doseq [body [nil {} {:token 1} {:token "bad"} {:token token :extra true}]]
-        (is (= 400 (:status (restore-fn (assoc req :body-params body))))))
-      (is (= 204 (:status (restore-fn (assoc req :body-params {:token token})))))
-      (is (= "active" (get-in (state req) [:body :state]))))))
+(deftest malformed-recovery-requests-are-rejected-before-accessing-capabilities
+  (doseq [body [nil {} {:token 1} {:token "token" :extra true}]]
+    (let [{:keys [context calls]} (data/fixture {})]
+      (is (= {:status 400 :body {:error "Recovery token is required"}}
+             ((handler/restore context) (assoc request :body-params body))))
+      (is (empty? @calls)))))
+
+(deftest recovery-rejects-ciphertext-with-an-unknown-key-id
+  (let [foreign (tempel/keychain-add-symmetric-key (tempel/keychain) :random {:key-id "foreign"})
+        master (crypto/open {:key-id "master"})
+        ciphertext (crypto-core/wrap foreign {:keychain (crypto-core/new-keychain)
+                                              :associated-data (.getBytes "v-test" "UTF-8")})
+        token (.encodeToString (.withoutPadding (Base64/getUrlEncoder))
+                               (cbor/encode [1 "v-test" "master" ciphertext]))
+        stored {:id "v-test"}
+        {:keys [context state calls]} (data/fixture {:stored stored})
+        response ((handler/restore (assoc context ::core/key-service master))
+                  (assoc request :body-params {:token token}))]
+    (is (= {:status 400 :body {:error "Invalid recovery token"}} response))
+    (is (= stored @state))
+    (is (empty? (data/calls-for calls {:operation :write})))))
+
+(deftest recovery-rejects-malformed-keychain-envelopes
+  (let [master (crypto/open {:key-id "master"})]
+    (doseq [[description ciphertext]
+            (tempel-data/malformed-envelopes {:key-protection master
+                                              :associated-data (.getBytes "v-test" "UTF-8")})]
+      (testing description
+        (let [token (.encodeToString (.withoutPadding (Base64/getUrlEncoder))
+                      (cbor/encode [1 "v-test" "master" ciphertext]))
+              stored {:id "v-test"}
+              {:keys [context state calls]} (data/fixture {:stored stored})
+              response ((handler/restore (assoc context ::core/key-service master))
+                        (assoc request :body-params {:token token}))]
+          (is (= {:status 400 :body {:error "Invalid recovery token"}} response))
+          (is (= stored @state))
+          (is (empty? (data/calls-for calls {:operation :write}))))))))
+
+(deftest exporting-a-recovery-token-preserves-http-error-statuses
+  (doseq [[label options expected]
+          [["no manage permission" {:permission :pull} {:status 403 :body {:error "Forbidden"}}]
+           ["vault does not exist" {:stored nil} {:status 404 :body {:error "Vault not found"}}]
+           ["recovery token cannot be exported after deletion" {:stored {:id "v-test"}}
+            {:status 409 :body {:error "Vault is deleted"}}]]]
+    (testing label
+      (let [{:keys [context]} (data/fixture options)]
+        (is (= expected ((handler/recovery-token context) request)))))))
+
+(deftest recovery-distinguishes-invalid-tokens-from-key-service-and-unexpected-failures
+  (doseq [[label unwrap expected]
+          [["invalid ciphertext" (constantly nil) {:status 400 :body {:error "Invalid recovery token"}}]
+           ["key service failed" #(throw (ex-info "Key service failed" {::anomaly/category ::anomaly/fault
+                                                                        :reason ::keychain/key-service-failed}))
+            {:status 500 :body {:error "Key service failed"}}]
+           ["unexpected failure" #(throw (IllegalStateException. "Unexpected decrypt failure"))
+            {:status 500 :body {:error "Unexpected decrypt failure"}}]]]
+    (testing label
+      (let [{:keys [context state calls]} (data/fixture {:unwrap unwrap})
+            recovery ((handler/recovery-token context) request)]
+        ((handler/delete context) request)
+        (let [writes-before (count (data/calls-for calls {:operation :write}))]
+          (is (= expected ((handler/restore context) (assoc request :body-params (:body recovery)))))
+          (is (nil? (:ciphertext @state)))
+          (is (= writes-before (count (data/calls-for calls {:operation :write})))))))))

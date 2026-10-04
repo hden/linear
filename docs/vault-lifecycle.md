@@ -18,7 +18,7 @@ array `[1, vault-id, master-key-id, wrapped-key-bytes]`. No plaintext key appear
 in the token. Restoration checks the envelope and authenticates the ciphertext
 against the requested vault ID. Invalid, corrupted, unsupported-version, or
 other-vault tokens return 400. Restoration requires the corresponding master
-key to remain available through the injected key provider; unavailable keys
+key to remain available through the injected key protection capability; unavailable keys
 produce a server error. Production KMS integration and key rotation are outside
 this change.
 

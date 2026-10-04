@@ -15,7 +15,7 @@
    :vault {:id "v-1"
            :created java.time.Instant/EPOCH
            :keychain (reify keychain/Keychain
-                       (-id [_] "test")
+
                        (-encrypt [_ _ _] (byte-array 0))
                        (-decrypt [_ _ _] nil))}})
 

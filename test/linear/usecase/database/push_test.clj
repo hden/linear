@@ -3,6 +3,7 @@
    [clojure.test :refer [deftest is]]
    [cognitect.anomalies :as anomaly]
    [duct.test :refer [with-system]]
+   [linear.adapter.crypto.core :as crypto-core]
    [linear.adapter.crypto.tempel :as crypto]
    [linear.adapter.postgres]
    [linear.adapter.slatedb.store]
@@ -18,8 +19,7 @@
    [linear.usecase.database.revisions :as revisions]
    [linear.usecase.grant :as grant]
    [linear.usecase.transaction :as transaction]
-   [next.jdbc :as jdbc]
-   [taoensso.tempel :as tempel]))
+   [next.jdbc :as jdbc]))
 
 (defn- snapshot [revision-id]
   (reify revisions/Snapshot
@@ -37,9 +37,9 @@
     (-changes-since [_ _ _]
       #{})))
 
-(defn- application-context [datasource master-key store evaluator]
+(defn- application-context [datasource key-protection store evaluator]
   {::core/database datasource
-   ::core/master-key master-key
+   ::core/key-service key-protection
    ::core/revision-store store
    ::core/evaluator evaluator})
 
@@ -58,9 +58,9 @@
     (let [datasource (:duct.database.sql/hikaricp system)
           store (:linear.adapter.slatedb.store/store system)
           evaluator (:linear.adapter.sqlite.evaluator/evaluator system)
-          {:keys [database-id master-key keychain vault-id]}
+          {:keys [database-id key-protection keychain vault-id]}
           (postgres-data/create-database! {:datasource datasource})
-          context (application-context datasource master-key store evaluator)
+          context (application-context datasource key-protection store evaluator)
           args {:actor "actor-1" :database-id database-id}
           progress {:client-id "client" :generation 0 :change-id 1}
           command (sync-command [{:sql "UPDATE t SET value = 'saved' WHERE id = 1" :parameters []}]
@@ -93,7 +93,7 @@
 (deftest ^:integration publication-conflict-rereads-sync-progress-before-replay
   (with-system [system (run {:keys [:duct.database/sql :duct.migrator/ragtime]})]
     (let [datasource (:duct.database.sql/hikaricp system)
-          {:keys [database-id master-key]} (postgres-data/create-database! {:datasource datasource})
+          {:keys [database-id key-protection]} (postgres-data/create-database! {:datasource datasource})
           progress {:client-id "client" :generation 0 :change-id 1}
           stored (atom nil)
           evaluations (atom 0)
@@ -112,7 +112,7 @@
                       (-evaluate [_ _]
                         (swap! evaluations inc)
                         {:revision-id "r-next" :parent "r-current" :database-page-count 1 :pages {}}))]
-      (is (nil? (database/push! (application-context datasource master-key store evaluator)
+      (is (nil? (database/push! (application-context datasource key-protection store evaluator)
                   {:actor "actor-1" :database-id database-id
                    :command {:statements [] :sync-progress progress}})))
       (is (= 2 @reads))
@@ -123,7 +123,7 @@
   (with-system [system (run {:keys [:duct.database/sql
                                     :duct.migrator/ragtime]})]
     (let [datasource (:duct.database.sql/hikaricp system)
-          {:keys [database-id vault-id master-key]}
+          {:keys [database-id vault-id key-protection]}
           (postgres-data/create-database! {:datasource datasource})
           events    (atom [])
           store     (reify
@@ -142,7 +142,7 @@
                          :parent "r-current"
                          :database-page-count 1
                          :pages {}}))
-          context   (application-context datasource master-key store evaluator)]
+          context   (application-context datasource key-protection store evaluator)]
       (grant/set-grant! context {:actor "actor-1"
                                  :vault-id vault-id
                                  :subject "pull-actor"
@@ -162,7 +162,7 @@
 
       (reset! events [])
       (let [denied-push (catch-ex-data
-                          #(database/push! (assoc context ::core/master-key nil)
+                          #(database/push! (assoc context ::core/key-service nil)
                                            {:actor "pull-actor"
                                             :database-id database-id
                                             :command {:statements []}}))]
@@ -192,10 +192,10 @@
     (let [datasource  (:duct.database.sql/hikaricp system)
           store       (:linear.adapter.slatedb.store/store system)
           evaluator   (:linear.adapter.sqlite.evaluator/evaluator system)
-          {:keys [database-id master-key keychain]}
+          {:keys [database-id key-protection keychain]}
           (postgres-data/create-database! {:datasource datasource})
           context     {::core/database datasource
-                       ::core/master-key master-key
+                       ::core/key-service key-protection
                        ::core/revision-store store
                        ::core/evaluator evaluator}]
       (slatedb-data/store-root! {:store store
@@ -221,8 +221,8 @@
   (with-system [system (run {:keys [:duct.database/sql
                                     :duct.migrator/ragtime]})]
     (let [datasource  (:duct.database.sql/hikaricp system)
-          master-key (crypto/keychain "dev-ephemeral" (tempel/keychain))
-          keychain   (crypto/new-keychain)
+          key-protection (crypto/open {:key-id "dev-ephemeral"})
+          keychain   (crypto-core/new-keychain)
           suffix     (random-uuid)
           vault-id   (str "v-" suffix)
           database-id (str "d-" suffix)
@@ -272,12 +272,12 @@
                             :database-page-count 1
                             :pages {}})))
           context    {::core/database transactable
-                      ::core/master-key master-key
+                      ::core/key-service key-protection
                       ::core/revision-store store
                       ::core/evaluator evaluator}
           command    {:statements []}]
       (postgres-data/create-database! {:datasource datasource
-                                       :master-key master-key
+                                       :key-protection key-protection
                                        :keychain keychain
                                        :database-id database-id
                                        :vault-id vault-id
@@ -316,7 +316,7 @@
   (with-system [system (run {:keys [:duct.database/sql
                                     :duct.migrator/ragtime]})]
     (let [datasource (:duct.database.sql/hikaricp system)
-          {:keys [database-id master-key]}
+          {:keys [database-id key-protection]}
           (postgres-data/create-database! {:datasource datasource})
           resolved-names (atom [])
           evaluated    (atom [])
@@ -349,7 +349,7 @@
                               :database-page-count 1
                               :pages {}})))
           result       (database/push! (application-context datasource
-                                         master-key
+                                         key-protection
                                          store
                                          evaluator) {:actor "actor-1" :database-id database-id :command {:statements []}})]
       (is (= "r-second-next" (:revision-id result)))
@@ -361,7 +361,7 @@
   (with-system [system (run {:keys [:duct.database/sql
                                     :duct.migrator/ragtime]})]
     (let [datasource (:duct.database.sql/hikaricp system)
-          {:keys [database-id master-key]}
+          {:keys [database-id key-protection]}
           (postgres-data/create-database! {:datasource datasource})
           published? (atom false)
           store      (reify
@@ -380,7 +380,7 @@
                           :pages {}}))
           error      (try
                        (database/push! (application-context datasource
-                                         master-key
+                                         key-protection
                                          store
                                          evaluator) {:actor "actor-1" :database-id database-id :command {:statements []}})
                        nil
@@ -394,7 +394,7 @@
   (with-system [system (run {:keys [:duct.database/sql
                                     :duct.migrator/ragtime]})]
     (let [datasource (:duct.database.sql/hikaricp system)
-          {:keys [database-id master-key]}
+          {:keys [database-id key-protection]}
           (postgres-data/create-database! {:datasource datasource})
           reads     (atom 0)
           failure   (ex-info "Unavailable" {::anomaly/category ::anomaly/unavailable})
@@ -411,7 +411,7 @@
                         (throw (IllegalStateException. "must not evaluate"))))
           error     (try
                       (database/push! (application-context datasource
-                                        master-key
+                                        key-protection
                                         store
                                         evaluator) {:actor "actor-1" :database-id database-id :command {:statements []}})
                       nil
@@ -424,7 +424,7 @@
   (with-system [system (run {:keys [:duct.database/sql
                                     :duct.migrator/ragtime]})]
     (let [datasource (:duct.database.sql/hikaricp system)
-          {:keys [database-id master-key]}
+          {:keys [database-id key-protection]}
           (postgres-data/create-database! {:datasource datasource})
           publishes (atom 0)
           store     (reify
@@ -445,7 +445,7 @@
                          :pages {}}))
           error     (try
                       (database/push! (application-context datasource
-                                        master-key
+                                        key-protection
                                         store
                                         evaluator) {:actor "actor-1" :database-id database-id :command {:statements []}})
                       nil

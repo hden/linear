@@ -85,6 +85,28 @@ An entry point accepts the context as a map. Malli instrumentation validates a
 capability at the narrower domain-function boundary where that capability is
 used. Schemas that have no reuse requirement remain inline.
 
+## Cryptographic resources and capabilities
+
+Only resources with application-lifetime state become lifecycle components.
+Functions, configuration values, and capability projections are not separate
+components. Duct assembles them around the resource that owns their state.
+
+`:linear.adapter.crypto/key-service` owns the cryptographic resource. The
+application context stores it once under `:linear.usecase.core/key-service`.
+The use-case accessors project `KeyGenerator` and `KeyProtection` separately;
+the Vault use-case composes data-key generation, wrapping, and persistence.
+`Keychain` provides only byte encryption and decryption for resolved data keys.
+Data keys are Vault values, not application lifecycle components.
+
+Provider selection is adapter configuration. The local provider owns an
+ephemeral KEK. Provider names and Tempel representations do not appear in the
+capability contracts or application context. Shared data-key mechanisms live in
+`linear.adapter.crypto.core`; providers depend inward on those mechanisms.
+
+The configured protection key is already available as a capability. Vault
+checks its ID directly against `encrypted-by`; no retriever fetches an already
+injected value. Labrador remains responsible for retrieving stored Vault facts.
+
 ## Transactions and retries
 
 A use-case decides where a transaction starts and ends, whether it is read-only,
@@ -103,7 +125,7 @@ capabilities belong to use-cases.
 Vault retrieval is composed as:
 
 ```text
-require pull grant -> raw vault -> configured master key -> unwrap keychain
+require pull grant -> raw vault -> check protection key ID -> unwrap keychain
 ```
 
 Database retrieval is composed in one PostgreSQL transaction as:
@@ -114,8 +136,8 @@ raw database -> require grant for its vault ID -> composed vault
 
 Normal sync retrieval joins current attributes and excludes tombstones;
 missing and closed identities both produce `database-not-found`. Management
-retrieval includes tombstones. Vault composition resolves the configured
-master key and decrypts the data key before sync uses the database. See
+retrieval includes tombstones. Vault composition checks the configured
+protection key ID and unwraps the data key before sync uses the database. See
 [database lifecycle](database-lifecycle.md) for closure and recovery semantics.
 
 The Labrador tags are stable internal contracts. Composition must not be moved
@@ -170,8 +192,8 @@ Peer capability implementations do not depend on one another. The Integrant
 hierarchy derives the concrete `:duct.database.sql/hikaricp` key from the
 abstract `:linear.adapter.postgres/datasource` key. Duct configuration refers
 to the abstract key, so no identity component exists solely to rename Hikari.
-SQLite, SlateDB, and crypto adapters are loaded by their existing concrete
-lifecycle keys.
+SQLite and SlateDB adapters are loaded by their concrete lifecycle keys.
+Crypto implementation selection belongs to its technology root.
 
 ## Use-case boundaries and names
 
