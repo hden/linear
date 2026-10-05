@@ -23,7 +23,7 @@
         com.github.hden/labrador            {:mvn/version "0.2.0"}
         metosin/malli                       {:mvn/version "0.20.2"}
         hden/duct.auth.jwks                 {:mvn/version "0.2.2"}
-        buddy/buddy-sign                    {:mvn/version "3.5.351"}}
+        buddy/buddy-sign                    {:mvn/version "3.6.1-359"}}
  :aliases
  {:test {:extra-paths ["test"]
          :extra-deps {org.xerial/sqlite-jdbc {:mvn/version "3.53.4.0"}
