@@ -63,7 +63,7 @@
   :crap {:extra-paths ["test"]
          :extra-deps {io.github.unclebob/crap4clj
                       {:git/url "https://github.com/unclebob/crap4clj"
-                       :git/sha "e6e0312fb9fe25cb8bdc55557d60c0e1c0568fb9"}
+                       :git/sha "e90be2e7aa02c2ec5d6544e9cecddc6b73ad3e4d"}
                       ring/ring-mock
                       {:mvn/version "0.6.2"}}
          :main-opts ["-m" "crap4clj.core"]}
