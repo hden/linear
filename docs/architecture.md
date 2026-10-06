@@ -42,7 +42,7 @@ approved harness change. There is no inline or command-line suppression.
 
 `linear.middleware.authentication` verifies access tokens and replaces request
 identity with the verified `sub`. Handlers pass that subject inward as `:actor`;
-the grant use-case owns permission policy. See [README](../README.md#authentication)
+the grant use-case owns permission policy. See [authentication](authentication.md)
 for token configuration, public routes, and grant management examples.
 
 The grant store exposes raw batch set and revoke capabilities across vaults.
