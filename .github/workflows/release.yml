@@ -94,7 +94,7 @@ jobs:
             --mount type=bind,src="$PWD/package.json",dst=/workspace/package.json,readonly \
             --mount type=bind,src="$PWD/package-lock.json",dst=/workspace/package-lock.json,readonly \
             linear-release:test sh -c 'clojure -M:duct --main --keys :duct.migrator/ragtime && npm ci --omit=dev && bb e2e'
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -144,7 +144,7 @@ jobs:
           pattern: digest-*
           merge-multiple: true
           path: ${{ runner.temp }}/digests
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
