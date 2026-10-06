@@ -19,7 +19,7 @@ GCP KMS CryptoKey, and GCS bucket.
 
 `OIDC_JWKS_URL` optionally overrides the trusted JWKS endpoint. API access
 tokens must use RS256 and include the configured issuer, audience, expiration,
-and a nonempty `sub`. See [authentication](../README.md#authentication).
+and a nonempty `sub`. See [authentication](authentication.md).
 `PORT` optionally changes the listening port.
 
 Use a dedicated GCS bucket. A URL path such as `gs://bucket/prefix` does not

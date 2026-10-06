@@ -19,13 +19,14 @@ in the token. Restoration checks the envelope and authenticates the ciphertext
 against the requested vault ID. Invalid, corrupted, unsupported-version, or
 other-vault tokens return 400. Restoration requires the corresponding master
 key to remain available through the injected key protection capability; unavailable keys
-produce a server error. See [KEK configuration](../README.md#deployment-target)
+produce a server error. See [KEK configuration](deployment.md#required-settings)
 for GCP KMS. Key rewrapping is not implemented.
 
 An active vault keeps its key on restoration, after validating the token.
 Deletion and restoration serialize on the vault row; mixed concurrent requests
 leave the state produced by the last committed operation. A retried vault
-creation still returns its original IDs and does not restore keys or grants.
+creation by the same actor still returns its original IDs, even after grant
+revocation, and does not restore keys or grants.
 
 A deleted vault allows state retrieval and grant management. Recovery token
 export, new data pulls, pushes, and sync metadata return 409. Operations that
