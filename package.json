@@ -7,7 +7,7 @@
     "lint:secrets": "secretlint \"**/*\""
   },
   "dependencies": {
-    "@tursodatabase/sync": "0.8.1"
+    "@tursodatabase/sync": "0.8.2"
   },
   "devDependencies": {
     "@secretlint/secretlint-rule-preset-recommend": "13.0.7",
