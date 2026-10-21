@@ -21,7 +21,7 @@
         org.roaringbitmap/RoaringBitmap     {:mvn/version "1.6.24"}
         funcool/promesa                     {:mvn/version "12.0.1"}
         com.github.hden/labrador            {:mvn/version "0.2.0"}
-        metosin/malli                       {:mvn/version "0.20.2"}
+        metosin/malli                       {:mvn/version "0.20.3"}
         hden/duct.auth.jwks                 {:mvn/version "0.2.2"}
         buddy/buddy-sign                    {:mvn/version "3.6.1-359"}}
  :aliases
