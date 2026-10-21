@@ -2,7 +2,7 @@
 
 Linear is an open-source Turso sync server.
 
-Verified with [`@tursodatabase/sync` 0.8.1](docs/turso-compatibility.md).
+Verified with [`@tursodatabase/sync` 0.8.3](docs/turso-compatibility.md).
 
 ## Getting started
 
