@@ -6,7 +6,7 @@
         org.duct-framework/module.sql       {:mvn/version "0.9.0"}
         org.duct-framework/module.web       {:mvn/version "0.13.6"}
         org.duct-framework/test             {:mvn/version "0.1.0"}
-        org.postgresql/postgresql           {:mvn/version "42.7.13"}
+        org.postgresql/postgresql           {:mvn/version "42.7.14"}
         org.replikativ/boring               {:mvn/version "0.1.30"}
         org.suskalo/coffi                   {:mvn/version "1.0.615"}
         com.cognitect/anomalies             {:mvn/version "0.1.12"}
