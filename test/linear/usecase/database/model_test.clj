@@ -196,3 +196,21 @@
       (doseq [options [{:client-revision "r-old"} {:server-revision "r-missing"}]]
         (is (identical? error (try (model/pull database options)
                                 (catch clojure.lang.ExceptionInfo caught caught))))))))
+
+(deftest pull-excludes-pages-outside-the-target-size-after-shrinkage
+  (doseq [[page-count options expected-ids]
+          [[1 {:client-revision "r-old"} #{1}]
+           [1 {:client-revision "r-old" :page-ids #{1 2}} #{1}]
+           [1 {:client-revision "r-old" :page-ids #{2}} #{}]
+           [1 {:client-revision "r-old" :server-revision "r-target"} #{1}]
+           [0 {:client-revision "r-old"} #{}]]]
+    (let [target (snapshot "r-target" page-count
+                           (fn [{:keys [ids]}]
+                             (is (= expected-ids ids))
+                             (zipmap ids (repeat (byte-array [1])))))
+          head (snapshot "r-newer" 3 (fn [_] (throw (AssertionError. "must use the target snapshot"))))
+          view (view (if (:server-revision options) head target) {"r-target" target} #{1 2})
+          result (model/pull (model/database attributes {::model/consistent-view view}) options)]
+      (is (= "r-target" (:server-revision result)))
+      (is (= page-count (:database-page-count result)))
+      (is (= expected-ids (set (keys (:pages result))))))))

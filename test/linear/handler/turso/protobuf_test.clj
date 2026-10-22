@@ -2,8 +2,13 @@
   (:require
    [clojure.test :refer [deftest is testing]]
    [cognitect.anomalies :as anomaly]
+   [linear.adapter.crypto.core :as crypto]
+   [linear.adapter.slatedb.connection :as connection]
+   [linear.adapter.slatedb.store]
    [linear.handler.turso.protobuf :as protobuf]
    [linear.test :as test]
+   [linear.usecase.database.model :as model]
+   [linear.usecase.database.revisions :as revisions]
    [ring.core.protocols :as ring])
   (:import
    (java.io ByteArrayOutputStream DataOutputStream)
@@ -179,3 +184,34 @@
     (let [data (test/catch-ex-data decode)]
       (is (= ::anomaly/incorrect (::anomaly/category data)))
       (is (string? (::anomaly/message data))))))
+
+(deftest ^:integration incremental-pulls-across-shrinkage-stream-only-existing-target-pages
+  (let [store (connection/open {:object-store-url "memory:///" :max-open-databases 1})
+        database {:id "d-shrink" :display-name "Shrink"
+                  :vault {:id "v-shrink" :created java.time.Instant/EPOCH :keychain (crypto/new-keychain)}}
+        assert-pull (fn [options]
+                      (revisions/with-consistent-view [view store database]
+                        (let [pull (model/pull (model/database database {::model/consistent-view view}) options)
+                              expected-pages (if (= #{2} (:page-ids options)) {} {1 '(3)})]
+                          (is (= "r-shrink" (:server-revision pull)))
+                          (is (= 1 (:database-page-count pull)))
+                          (is (= expected-pages (update-vals (:pages pull) seq)))
+                          (with-open [output (ByteArrayOutputStream.)]
+                            (ring/write-body-to-stream (protobuf/pull-stream pull) nil output)
+                            (is (pos? (.size output)))))))]
+    (try
+      (revisions/initialize! store
+        {:database database
+         :revision {:revision-id "r-root" :parent nil :database-page-count 1 :pages {1 (byte-array [1])}}})
+      (doseq [revision [{:revision-id "r-grow" :parent "r-root" :database-page-count 2 :pages {2 (byte-array [2])}}
+                        {:revision-id "r-shrink" :parent "r-grow" :database-page-count 1 :pages {1 (byte-array [3])}}]]
+        (revisions/publish-next! store {:database database :revision revision}))
+      (doseq [options [{:client-revision "r-root"}
+                       {:client-revision "r-root" :page-ids #{1 2}}
+                       {:client-revision "r-root" :page-ids #{2}}]]
+        (assert-pull options))
+      (revisions/publish-next! store
+        {:database database
+         :revision {:revision-id "r-regrow" :parent "r-shrink" :database-page-count 2 :pages {2 (byte-array [4])}}})
+      (assert-pull {:client-revision "r-root" :server-revision "r-shrink"})
+      (finally (connection/close store)))))

@@ -110,9 +110,10 @@
         target-revision (revisions/revision-id snapshot)
         page-count (revisions/size snapshot)
         changed-page-ids (changed-page-ids view target-revision client-revision page-count)
-        selected-page-ids (if page-ids
-                            (set (filter page-ids changed-page-ids))
-                            changed-page-ids)]
+        selected-page-ids (into #{}
+                                (filter #(and (<= % page-count)
+                                              (or (nil? page-ids) (contains? page-ids %))))
+                                changed-page-ids)]
     {:server-revision target-revision
      :database-page-count page-count
      :pages (revisions/fetch-pages-by-ids snapshot {:ids selected-page-ids})}))
