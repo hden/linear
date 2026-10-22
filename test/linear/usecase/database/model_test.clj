@@ -164,3 +164,35 @@
             (is (not (spec/valid? input-schema (dissoc database capability))))))))
     (is (not (spec/valid? ::revisions/consistent-view
                (model/database attributes {::model/consistent-view view}))))))
+
+(deftest expired-client-history-fetches-all-selected-pages-from-the-fixed-target
+  (let [fetched (atom nil)
+        target (snapshot "r-target" 3 (fn [{:keys [ids]}] (reset! fetched ids) {}))
+        view (reify revisions/ConsistentView
+               (-head [_] (throw (AssertionError. "must keep the explicit target")))
+               (-as-of [_ revision-id]
+                 (is (= "r-target" revision-id))
+                 target)
+               (-changes-since [_ target-id client-id]
+                 (is (= ["r-target" "r-old"] [target-id client-id]))
+                 (throw (ex-info "Expired" {::anomaly/category ::anomaly/not-found
+                                            :reason ::revisions/revision-not-found :expired? true}))))
+        database (model/database attributes {::model/consistent-view view})]
+    (is (= "r-target" (:server-revision (model/pull database {:client-revision "r-old" :server-revision "r-target" :page-ids #{2 3 4}}))))
+    (is (= #{2 3} @fetched))))
+
+(deftest history-corruption-and-unavailable-explicit-targets-are-not-full-pull-fallbacks
+  (doseq [failure [{::anomaly/category ::anomaly/fault :reason ::revisions/incomplete-revision}
+                   {::anomaly/category ::anomaly/fault :reason :linear.adapter.slatedb.codec/unreadable-record}
+                   {::anomaly/category ::anomaly/fault :reason ::revisions/revision-cycle}
+                   {::anomaly/category ::anomaly/not-found :reason ::revisions/revision-not-found}]]
+    (let [error (ex-info "History failed" failure)
+          current (snapshot "r-head" 1 (fn [_] (throw (AssertionError. "must not fetch"))))
+          view (reify revisions/ConsistentView
+                 (-head [_] current)
+                 (-as-of [_ _] (throw error))
+                 (-changes-since [_ _ _] (throw error)))
+          database (model/database attributes {::model/consistent-view view})]
+      (doseq [options [{:client-revision "r-old"} {:server-revision "r-missing"}]]
+        (is (identical? error (try (model/pull database options)
+                                (catch clojure.lang.ExceptionInfo caught caught))))))))

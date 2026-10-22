@@ -77,6 +77,19 @@
                            :actual-parent (:parent revision)})))
         revision))))
 
+(defn- changed-page-ids [view target-revision client-revision page-count]
+  (cond
+    (not client-revision) (set (range 1 (inc page-count)))
+    (= client-revision target-revision) #{}
+    :else
+    (try
+      (revisions/changes-since view {:target-revision-id target-revision :client-revision-id client-revision})
+      (catch clojure.lang.ExceptionInfo error
+        (let [data (ex-data error)]
+          (if (and (= ::revisions/revision-not-found (:reason data)) (:expired? data))
+            (set (range 1 (inc page-count)))
+            (throw error)))))))
+
 (defn pull
   {:malli/schema [:->
                   [:and ::database
@@ -96,10 +109,7 @@
                    (revisions/head view))
         target-revision (revisions/revision-id snapshot)
         page-count (revisions/size snapshot)
-        changed-page-ids (cond
-                           (not client-revision) (set (range 1 (inc page-count)))
-                           (= client-revision target-revision) #{}
-                           :else (revisions/changes-since view {:target-revision-id target-revision :client-revision-id client-revision}))
+        changed-page-ids (changed-page-ids view target-revision client-revision page-count)
         selected-page-ids (if page-ids
                             (set (filter page-ids changed-page-ids))
                             changed-page-ids)]
