@@ -7,7 +7,7 @@
    (org.apache.commons.pool2.impl DefaultPooledObject GenericKeyedObjectPool GenericKeyedObjectPoolConfig)))
 
 (defrecord Connection
-           [borrow-database return-database close-resources])
+           [borrow-database return-database close-resources revision-retention-days])
 
 (defn connection [options]
   (map->Connection options))
@@ -60,14 +60,17 @@
   {:malli/schema [:->
                   [:map
                    [:object-store-url :string]
-                   [:max-open-databases pos-int?]]
+                   [:max-open-databases pos-int?]
+                   [:revision-retention-days {:optional true} pos-int?]]
                   [:fn #(instance? Connection %)]]}
-  [{:keys [object-store-url max-open-databases]}]
+  [{:keys [object-store-url max-open-databases revision-retention-days]
+    :or {revision-retention-days 30}}]
   (let [object-store (ffi/open-object-store object-store-url)]
     (try
       (let [pool (database-pool object-store max-open-databases)]
         (connection
-          {:borrow-database (fn [database-id]
+          {:revision-retention-days revision-retention-days
+           :borrow-database (fn [database-id]
                               (.borrowObject ^GenericKeyedObjectPool pool database-id))
            :return-database (fn [database-id database]
                               (.returnObject ^GenericKeyedObjectPool pool

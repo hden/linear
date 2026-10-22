@@ -1,179 +1,101 @@
 (ns linear.adapter.slatedb.snapshot-test
   (:require
    [clojure.test :refer [deftest is]]
+   [cognitect.anomalies :as anomaly]
    [linear.adapter.crypto.core :as crypto-core]
    [linear.adapter.slatedb.codec :as codec]
-   [linear.adapter.slatedb.ffi :as ffi]
    [linear.adapter.slatedb.key :as key]
    [linear.adapter.slatedb.snapshot :as snapshot]
-   [linear.usecase.database.revisions :as revisions])
-  (:import
-   (java.util Arrays UUID)))
+   [linear.test :refer [catch-ex-data]]
+   [linear.usecase.database.revisions :as revisions]))
 
-(defn- revision-records [keychain]
-  (let [revision {:revision-id         "r-01K002"
-                  :parent              "r-01K001"
-                  :database-page-count 2
-                  :pages               {1 (byte-array [2])
-                                        2 (byte-array [9])}}
-        revision-key (key/revision (:revision-id revision))]
-    [[(key/head) (codec/encode-head {:revision-id (:revision-id revision)})]
-     [revision-key (codec/encode-revision keychain {:record-key revision-key :revision revision})]
-     [(key/page 1) (codec/encode-page keychain {:record-key (key/page 1) :page (get-in revision [:pages 1])})]
-     [(key/page 2) (codec/encode-page keychain {:record-key (key/page 2) :page (get-in revision [:pages 2])})]]))
+(defn- head [revision-id size]
+  {:revision-id revision-id :database-page-count size :history-expires-at Long/MAX_VALUE})
 
-(defn- with-seeded-snapshot [f]
+(defn- view [{:keys [head history pages]}]
   (let [keychain (crypto-core/new-keychain)
-        object-store (ffi/open-object-store "memory:///")
-        database (ffi/open-database! object-store (str "d-" (UUID/randomUUID)))]
-    (try
-      (let [transaction (ffi/await (ffi/begin-transaction database))]
-        (try
-          (ffi/await (ffi/write-values transaction (revision-records keychain)))
-          (ffi/await (ffi/commit-transaction transaction))
-          (finally
-            (ffi/close-transaction! transaction))))
-      (let [snapshot (ffi/await (ffi/open-snapshot database))]
-        (try
-          (f snapshot keychain)
-          (finally
-            (ffi/close-snapshot! snapshot))))
-      (finally
-        (ffi/close-database! database)
-        (ffi/close-object-store! object-store)))))
+        records (into {(seq (key/head)) (codec/encode-head head)}
+                      (concat
+                        (map (fn [[revision-id undo]]
+                               (let [record-key (key/revision revision-id)]
+                                 [(seq record-key) (codec/encode-revision keychain {:record-key record-key :revision undo})]))
+                             history)
+                        (map (fn [[page-id page]]
+                               (let [record-key (key/page page-id)]
+                                 [(seq record-key) (codec/encode-page keychain {:record-key record-key :page page})]))
+                             pages)))]
+    (snapshot/consistent-view {:read-values (fn [record-keys] (mapv #(get records (seq %)) record-keys))
+                               :keychain keychain})))
 
-(deftest ^:integration snapshot-reads-its-revision-metadata-and-pages
-  (with-seeded-snapshot
-    (fn [raw-snapshot keychain]
-      (let [read-values       #(ffi/await (ffi/read-snapshot-values raw-snapshot %))
-            database-snapshot (snapshot/snapshot {:read-values read-values :revision-id "r-01K002" :keychain keychain})
-            pages             (revisions/fetch-pages-by-ids database-snapshot
-                                {:ids #{1 2 3}})]
-        (is (= "r-01K002" (revisions/revision-id database-snapshot)))
-        (is (= 2 (revisions/size database-snapshot)))
-        (is (Arrays/equals (byte-array [2]) (get pages 1)))
-        (is (Arrays/equals (byte-array [9]) (get pages 2)))
-        (is (nil? (get pages 3)))))))
+(defn- page-values [snapshot ids]
+  (update-vals (revisions/fetch-pages-by-ids snapshot {:ids ids}) seq))
 
-(deftest ^:integration reads-head-revision-id
-  (with-seeded-snapshot
-    (fn [raw-snapshot _keychain]
-      (let [read-values #(ffi/await (ffi/read-snapshot-values raw-snapshot %))]
-        (is (= "r-01K002" (snapshot/head-revision-id read-values)))))))
+(deftest head-does-not-depend-on-history-and-hides-physical-tail-pages
+  (let [view (view {:head (head "r-head" 1)
+                    :pages {1 (byte-array [7]) 2 (byte-array [9])}})
+        current (revisions/head view)]
+    (is (= "r-head" (revisions/revision-id current)))
+    (is (= 1 (revisions/size current)))
+    (is (= {1 '(7) 2 nil} (page-values current #{1 2})))
+    (is (= {1 '(7)} (page-values (revisions/as-of view "r-head") #{1})))
+    (is (= #{} (revisions/changes-since view {:target-revision-id "r-head" :client-revision-id "r-head"})))))
 
-(deftest ^:integration consistent-view-reconstructs-an-as-of-snapshot-and-changes-since-it
-  (let [keychain  (crypto-core/new-keychain)
-        object-store (ffi/open-object-store "memory:///")
-        database  (ffi/open-database! object-store (str "d-" (UUID/randomUUID)))
-        root      {:revision-id         "r-root"
-                   :parent              nil
-                   :database-page-count 1
-                   :pages               {1 (byte-array [1])}}
-        first     {:revision-id         "r-first"
-                   :parent              "r-root"
-                   :database-page-count 2
-                   :pages               {2 (byte-array [2])}}
-        second    {:revision-id         "r-second"
-                   :parent              "r-first"
-                   :database-page-count 2
-                   :pages               {1 (byte-array [3])}}
-        records   (mapcat (fn [revision]
-                            (let [revision-key (key/revision (:revision-id revision))]
-                              (concat [[revision-key
-                                        (codec/encode-revision keychain {:record-key revision-key :revision revision})]]
-                                      (map (fn [[page-id page]]
-                                             (let [page-key (key/page page-id)]
-                                               [page-key
-                                                (codec/encode-page keychain {:record-key page-key :page page})]))
-                                           (:pages revision)))))
-                          [root first second])]
-    (try
-      (let [transaction (ffi/await (ffi/begin-transaction database))]
-        (try
-          (ffi/await
-            (ffi/write-values transaction
-                              (concat records
-                                      [[(key/head)
-                                        (codec/encode-head {:revision-id "r-second"})]])))
-          (ffi/await (ffi/commit-transaction transaction))
-          (finally
-            (ffi/close-transaction! transaction))))
-      (let [raw-snapshot (ffi/await (ffi/open-snapshot database))]
-        (try
-          (let [read-values #(ffi/await (ffi/read-snapshot-values raw-snapshot %))
-                view        (snapshot/consistent-view {:read-values read-values :keychain keychain})
-                as-of       (revisions/as-of view "r-first")
-                pages       (revisions/fetch-pages-by-ids as-of {:ids #{1 2}})]
-            (is (= "r-first" (revisions/revision-id as-of)))
-            (is (= 2 (revisions/size as-of)))
-            (is (Arrays/equals (byte-array [1]) (get pages 1)))
-            (is (Arrays/equals (byte-array [2]) (get pages 2)))
-            (is (= #{1 2}
-                   (revisions/changes-since view {:target-revision-id "r-second" :client-revision-id "r-root"}))))
-          (finally
-            (ffi/close-snapshot! raw-snapshot))))
-      (finally
-        (ffi/close-database! database)
-        (ffi/close-object-store! object-store)))))
+(deftest historical-reads-apply-every-newer-undo-and-stop-before-the-target
+  (let [view (view {:head (head "r-third" 2)
+                    :pages {1 (byte-array [4]) 2 (byte-array [2])}
+                    :history {"r-third" {:parent (head "r-second" 2) :undo-pages {1 (byte-array [3])}}
+                              "r-second" {:parent (head "r-first" 2) :undo-pages {1 (byte-array [1])}}
+                              "r-first" {:parent (head "r-root" 1) :undo-pages {2 nil}}}})]
+    (doseq [[revision-id size expected]
+            [["r-third" 2 {1 '(4) 2 '(2)}]
+             ["r-second" 2 {1 '(3) 2 '(2)}]
+             ["r-first" 2 {1 '(1) 2 '(2)}]
+             ["r-root" 1 {1 '(1) 2 nil}]]]
+      (let [snapshot (revisions/as-of view revision-id)]
+        (is (= size (revisions/size snapshot)))
+        (is (= expected (page-values snapshot #{1 2})))
+        (is (= (select-keys expected [1]) (page-values snapshot #{1})))))
+    (is (= #{1 2} (revisions/changes-since view {:target-revision-id "r-third" :client-revision-id "r-root"})))
+    (is (= #{2} (revisions/changes-since view {:target-revision-id "r-first" :client-revision-id "r-root"})))))
 
-(deftest as-of-rejects-a-revision-with-an-incomplete-page-state
-  (let [keychain    (crypto-core/new-keychain)
-        revision    {:revision-id         "r-incomplete"
-                     :parent              nil
-                     :database-page-count 2
-                     :pages               {1 (byte-array [1])}}
-        revision-key (key/revision (:revision-id revision))
-        values      {(seq revision-key) (codec/encode-revision keychain {:record-key revision-key :revision revision})}
-        read-values (fn [record-keys]
-                      (mapv #(values (seq %)) record-keys))
-        view        (snapshot/consistent-view {:read-values read-values :keychain keychain})
-        as-of       (revisions/as-of view "r-incomplete")]
-    (try
-      (revisions/fetch-pages-by-ids as-of {:ids #{2}})
-      (is false "as-of must reject incomplete page state")
-      (catch clojure.lang.ExceptionInfo error
-        (is (= "Revision does not contain page state" (.getMessage error)))))))
+(deftest snapshots-reject-missing-in-range-pages
+  (let [view (view {:head (head "r-head" 2) :pages {1 (byte-array [1])}})]
+    (is (= ::revisions/incomplete-revision
+           (:reason (catch-ex-data #(page-values (revisions/head view) #{2})))))))
 
 (deftest revision-chain-cycles-are-rejected
-  (let [keychain     (crypto-core/new-keychain)
-        revisions    [{:revision-id "r-cycle-a" :parent "r-cycle-b"
-                       :database-page-count 1 :pages {}}
-                      {:revision-id "r-cycle-b" :parent "r-cycle-a"
-                       :database-page-count 1 :pages {}}]
-        values       (into {}
-                           (map (fn [revision]
-                                  (let [revision-key (key/revision (:revision-id revision))]
-                                    [(seq revision-key)
-                                     (codec/encode-revision keychain {:record-key revision-key :revision revision})]))
-                                revisions))
-        read-values  (fn [record-keys]
-                       (mapv #(values (seq %)) record-keys))
-        view         (snapshot/consistent-view {:read-values read-values :keychain keychain})]
-    (try
-      (revisions/changes-since view {:target-revision-id "r-cycle-a" :client-revision-id "r-missing"})
-      (is false "revision cycles must be rejected")
-      (catch clojure.lang.ExceptionInfo error
-        (is (= "Revision chain contains a cycle" (.getMessage error)))))))
+  (let [view (view {:head (head "r-a" 1)
+                    :history {"r-a" {:parent (head "r-b" 1) :undo-pages {}}
+                              "r-b" {:parent (head "r-a" 1) :undo-pages {}}}})]
+    (doseq [operation [#(revisions/as-of view "r-missing")
+                       #(revisions/changes-since view {:target-revision-id "r-a" :client-revision-id "r-missing"})]]
+      (is (= ::revisions/revision-cycle (:reason (catch-ex-data operation)))))))
 
-(deftest missing-revisions-and-invalid-cursors-retain-their-domain-reasons
-  (let [keychain    (crypto-core/new-keychain)
-        revision    {:revision-id "r-head"
-                     :parent nil
-                     :database-page-count 1
-                     :pages {}}
-        revision-key (key/revision (:revision-id revision))
-        values      {(seq revision-key) (codec/encode-revision keychain {:record-key revision-key :revision revision})}
-        read-values (fn [record-keys]
-                      (mapv #(values (seq %)) record-keys))
-        view        (snapshot/consistent-view {:read-values read-values :keychain keychain})
-        reason      (fn [f]
-                      (try
-                        (f)
-                        (catch clojure.lang.ExceptionInfo error
-                          (:reason (ex-data error)))))]
+(deftest expired-history-and-unexpired-holes-have-distinct-outcomes
+  (doseq [[expires-at category reason expired?]
+          [[0 ::anomaly/not-found ::revisions/revision-not-found true]
+           [Long/MAX_VALUE ::anomaly/fault ::revisions/incomplete-revision false]]]
+    (let [view (view {:head (assoc (head "r-head" 1) :history-expires-at expires-at)})
+          error (catch-ex-data #(revisions/as-of view "r-old"))]
+      (is (= category (::anomaly/category error)))
+      (is (= reason (:reason error)))
+      (is (= expired? (:expired? error))))))
+
+(deftest missing-targets-and-invalid-cursors-retain-their-domain-reasons
+  (let [view (view {:head (head "r-head" 1)
+                    :history {"r-head" {:parent nil :undo-pages {1 nil}}}})]
     (is (= ::revisions/revision-not-found
-           (reason #(revisions/as-of view "r-missing"))))
+           (:reason (catch-ex-data #(revisions/as-of view "r-missing")))))
     (is (= ::revisions/invalid-revision-cursor
-           (reason #(revisions/changes-since view {:target-revision-id "r-head" :client-revision-id "r-missing"}))))
-    (is (= ::revisions/head-not-found
-           (reason #(snapshot/head-revision-id (constantly [nil])))))))
+           (:reason (catch-ex-data #(revisions/changes-since view {:target-revision-id "r-head" :client-revision-id "r-missing"}))))))
+  (is (= ::revisions/head-not-found
+         (:reason (catch-ex-data #(snapshot/head-metadata (constantly [nil])))))))
+
+(deftest unreadable-undo-is-not-treated-as-expired-history
+  (let [keychain (crypto-core/new-keychain)
+        values {(seq (key/head)) (codec/encode-head (assoc (head "r-head" 1) :history-expires-at 0))
+                (seq (key/revision "r-head")) (byte-array [0])}
+        view (snapshot/consistent-view {:read-values (fn [record-keys] (mapv #(get values (seq %)) record-keys))
+                                        :keychain keychain})]
+    (is (= ::codec/unreadable-record
+           (:reason (catch-ex-data #(revisions/as-of view "r-old")))))))

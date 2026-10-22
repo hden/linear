@@ -8,6 +8,9 @@
         slatedb-max-open-databases {:env "SLATEDB_MAX_OPEN_DATABASES"
                                     :type :int
                                     :default 128}
+        revision-retention-days  {:env "REVISION_RETENTION_DAYS"
+                                  :type :int
+                                  :default 30}
         sqlite-vfs-name          {:env "SQLITE_VFS_NAME"
                                   :default "linear-sqlite"}
         deployment-target        {:env "LINEAR_DEPLOYMENT_TARGET"
@@ -24,7 +27,8 @@
 
   :linear.adapter.slatedb.store/store
   {:object-store-url   #ig/var slatedb-object-store-url
-   :max-open-databases #ig/var slatedb-max-open-databases}
+   :max-open-databases #ig/var slatedb-max-open-databases
+   :revision-retention-days #ig/var revision-retention-days}
 
   :linear.adapter.postgres/module {}
 

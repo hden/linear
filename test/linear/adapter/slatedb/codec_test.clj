@@ -44,16 +44,15 @@
            (:reason (test/catch-ex-data
                       #(codec/decode-page keychain {:record-key target :value ciphertext})))))))
 
-(deftest revision-codec-retains-changed-pages
+(deftest revision-codec-retains-before-images-and-absent-pages
   (let [keychain  (fake-keychain :primary)
         record-key (key/revision "r-01K002")
-        revision  {:revision-id "r-01K002"
-                   :parent "r-01K001"
-                   :database-page-count 1
-                   :pages {1 (byte-array [1])}}
+        revision  {:parent {:revision-id "r-01K001" :database-page-count 1 :history-expires-at 123}
+                   :undo-pages {1 (byte-array [1]) 2 nil}}
         decoded   (codec/decode-revision keychain {:record-key record-key
                                                    :value (codec/encode-revision keychain {:record-key record-key :revision revision})})]
-    (is (= (dissoc revision :pages) (dissoc decoded :pages)))
-    (is (= #{1} (set (keys (:pages decoded)))))
-    (is (Arrays/equals (get-in revision [:pages 1])
-                       (get-in decoded [:pages 1])))))
+    (is (= (:parent revision) (:parent decoded)))
+    (is (= #{1 2} (set (keys (:undo-pages decoded)))))
+    (is (nil? (get-in decoded [:undo-pages 2])))
+    (is (Arrays/equals (get-in revision [:undo-pages 1])
+                       (get-in decoded [:undo-pages 1])))))

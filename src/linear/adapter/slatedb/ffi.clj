@@ -5,7 +5,7 @@
    [promesa.core :as p]
    [promesa.exec :as px])
   (:import
-   (io.slatedb.uniffi CloseReason Db DbBuilder DbSnapshot DbTransaction Error$Closed Error$Data Error$Internal Error$Invalid Error$Transaction Error$Unavailable IsolationLevel ObjectStore)
+   (io.slatedb.uniffi CloseReason Db DbBuilder DbSnapshot DbTransaction Error$Closed Error$Data Error$Internal Error$Invalid Error$Transaction Error$Unavailable IsolationLevel ObjectStore PutOptions Ttl$ExpireAtMillis Ttl$NoExpiry WriteHandle)
    (java.util.concurrent CompletionException ExecutionException)))
 
 (defn- closed-category [^Error$Closed error]
@@ -68,12 +68,12 @@
     (p/resolved [])
     keys))
 
-(defn- write-values-impl [transaction entries]
+(defn- write-values-impl [transaction entries options]
   (reduce
     (fn [write-promise [key value]]
       (p/then write-promise
               (fn [_previous-write]
-                (invoke :write-values #(.put ^DbTransaction transaction key value)))))
+                (invoke :write-values #(.putWithOptions ^DbTransaction transaction key value options)))))
     (p/resolved nil)
     entries))
 
@@ -147,10 +147,17 @@
                     keys))
 
 (defn write-values [transaction entries]
-  (write-values-impl transaction entries))
+  (write-values-impl transaction entries (PutOptions. (Ttl$NoExpiry.))))
+
+(defn write-expiring-values [transaction {:keys [entries expires-at]}]
+  (write-values-impl transaction entries (PutOptions. (Ttl$ExpireAtMillis. (long expires-at)))))
 
 (defn commit-transaction [transaction]
-  (invoke :commit-transaction #(.commit ^DbTransaction transaction)))
+  (p/then (invoke :commit-transaction #(.commit ^DbTransaction transaction))
+          (fn [handle]
+            (-> (invoke :commit-transaction #(.awaitDurable ^WriteHandle handle))
+                (p/finally (fn [_value _error]
+                             (.close ^WriteHandle handle)))))))
 
 (defn rollback-transaction [transaction]
   (invoke :rollback-transaction #(.rollback ^DbTransaction transaction)))

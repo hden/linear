@@ -177,6 +177,21 @@ column. SlateDB owns revisions, pages, and HEAD and publishes them atomically in
 its own transaction, rejecting stale parents. Push reads PostgreSQL and writes
 SlateDB; it does not introduce dual writes or a cross-store transaction.
 
+Evaluators publish changed page after-images. The SlateDB adapter captures
+before-images in the publication transaction and stores encrypted undo records
+with the parent HEAD descriptor. HEAD contains its own page count, and neither
+HEAD nor current pages expire. Historical reads apply undo records from HEAD
+back to the requested revision, stopping before undoing that revision.
+Physical tail pages remain available across database shrinkage and regrowth;
+snapshots hide pages beyond their logical page count.
+
+Undo records expire after the configured history retention (30 days by
+default), measured from the update that replaced the previous state. Expiry
+times never decrease along the revision chain. SlateDB owns compaction and
+physical garbage collection. An expired client cursor triggers a full-page
+pull for the selected target; an unavailable explicit target or missing
+unexpired history remains an error.
+
 ## PostgreSQL loading
 
 `linear.adapter.postgres` is a load-only technology root. It loads

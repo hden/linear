@@ -1,11 +1,12 @@
 (ns linear.adapter.slatedb.ffi-test
   (:require
+   [cheshire.core :as json]
    [clojure.test :refer [deftest is testing]]
    [cognitect.anomalies :as anomaly]
    [linear.adapter.slatedb.ffi :as ffi]
    [promesa.core :as p])
   (:import
-   (io.slatedb.uniffi CloseReason Error$Closed Error$Data Error$Internal Error$Invalid Error$Transaction Error$Unavailable)
+   (io.slatedb.uniffi CloseReason Db DbBuilder Error$Closed Error$Data Error$Internal Error$Invalid Error$Transaction Error$Unavailable FlushOptions FlushType Settings)
    (java.nio.charset StandardCharsets)
    (java.util Arrays)))
 
@@ -103,3 +104,49 @@
       (finally
         (ffi/close-database! database)
         (ffi/close-object-store! object-store)))))
+
+(defn- compaction-settings []
+  (with-open [defaults (Settings/_default)]
+    (-> (.toJsonString defaults)
+        (json/parse-string true)
+        (assoc :default_ttl_millis 1)
+        (assoc-in [:compactor_options :poll_interval] "10ms")
+        (assoc-in [:compactor_options :commit_compacted_interval] "10ms")
+        (assoc-in [:compactor_options :worker :compactions_poll_interval] "10ms")
+        (assoc-in [:compactor_options :scheduler_options] {"min_compaction_sources" "2" "max_compaction_sources" "2"})
+        json/generate-string
+        Settings/fromJsonString)))
+
+(deftest ^:integration compaction-removes-expired-history-and-preserves-current-and-retained-values
+  (with-open [object-store (ffi/open-object-store "memory:///")
+              settings (compaction-settings)
+              builder (DbBuilder. "d-ttl-compaction" object-store)]
+    (.withSettings builder settings)
+    (let [database (ffi/await (.build builder))
+          expired (utf8 "revision/expired")
+          retained (utf8 "revision/retained")
+          head (utf8 "head")
+          page (utf8 "page/1")]
+      (try
+        (with-open [transaction (ffi/await (ffi/begin-transaction database))]
+          (ffi/await (ffi/write-values transaction [[head (utf8 "r-current")] [page (utf8 "current")]]))
+          (ffi/await (ffi/write-expiring-values transaction {:entries [[expired (utf8 "old")]] :expires-at 0}))
+          (ffi/await (ffi/write-expiring-values transaction {:entries [[retained (utf8 "needed")]] :expires-at Long/MAX_VALUE}))
+          (ffi/await (ffi/commit-transaction transaction)))
+        (is (nil? (.expireTs (ffi/await (.getKeyValue ^Db database head)))))
+        (is (nil? (.expireTs (ffi/await (.getKeyValue ^Db database page)))))
+        (doseq [index (range 4)]
+          (with-open [transaction (ffi/await (ffi/begin-transaction database))]
+            (ffi/await (ffi/write-values transaction [[(utf8 (str "padding/" index)) (byte-array 4096)]]))
+            (ffi/await (ffi/commit-transaction transaction)))
+          (ffi/await (.flushWithOptions ^Db database (FlushOptions. FlushType/MEM_TABLE))))
+        (let [deadline (+ (System/nanoTime) 10000000000)]
+          (loop []
+            (when (and (some? (ffi/await (.get ^Db database expired))) (< (System/nanoTime) deadline))
+              (Thread/sleep 20)
+              (recur))))
+        (is (nil? (ffi/await (.get ^Db database expired))))
+        (is (Arrays/equals (utf8 "needed") (ffi/await (.get ^Db database retained))))
+        (is (Arrays/equals (utf8 "r-current") (ffi/await (.get ^Db database head))))
+        (is (Arrays/equals (utf8 "current") (ffi/await (.get ^Db database page))))
+        (finally (ffi/close-database! database))))))

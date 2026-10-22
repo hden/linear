@@ -12,17 +12,27 @@
    (io.slatedb.uniffi DbTransaction)
    (java.lang AutoCloseable)))
 
-(defn- revision-records [keychain revision]
-  (let [revision-id  (:revision-id revision)
-        revision-key (key/revision revision-id)]
-    (into [[revision-key
-            (codec/encode-revision keychain {:record-key revision-key :revision revision})]]
-          (concat
-            (map (fn [[page-id page]]
-                   (let [page-key (key/page page-id)]
-                     [page-key (codec/encode-page keychain {:record-key page-key :page page})]))
-                 (:pages revision))
-            [[(key/head) (codec/encode-head {:revision-id revision-id})]]))))
+(defn- current-state-records [keychain revision head]
+  (conj (mapv (fn [[page-id page]]
+                (let [page-key (key/page page-id)]
+                  [page-key (codec/encode-page keychain {:record-key page-key :page page})]))
+              (:pages revision))
+        [(key/head) (codec/encode-head head)]))
+
+(defn- undo-pages [read-values keychain head page-ids]
+  (let [record-keys (mapv key/page page-ids)
+        values (read-values record-keys)]
+    (into {}
+          (map (fn [page-id record-key value]
+                 (let [page (codec/decode-page keychain {:record-key record-key :value value})]
+                   (when (and head (<= page-id (:database-page-count head)) (nil? page))
+                     (throw (ex-info "Revision does not contain page state"
+                                     {::anomaly/category ::anomaly/fault
+                                      :reason ::revisions/incomplete-revision
+                                      :page-id page-id})))
+                   ;; Keep physical tail pages: an older revision can still need them after a regrowth.
+                   [page-id page]))
+               page-ids record-keys values))))
 
 (defn- add-suppressed! [error suppressed]
   (when suppressed
@@ -65,11 +75,23 @@
                               (when value
                                 (throw (revision-conflict "Database HEAD already exists" {} nil)))
                               nil)
-                            (snapshot/head-revision-id read-values))]
-          (ensure-current-parent! head revision)
+                            (snapshot/head-metadata read-values))
+              expires-at (max (+ (System/currentTimeMillis)
+                                 (* (:revision-retention-days store) 86400000))
+                              (or (:history-expires-at head) 0))
+              next-head (assoc (select-keys revision [:revision-id :database-page-count])
+                               :history-expires-at expires-at)]
+          (ensure-current-parent! (:revision-id head) revision)
+          (let [record-key (key/revision (:revision-id revision))
+                undo {:parent head
+                      :undo-pages (undo-pages read-values keychain head (vec (keys (:pages revision))))}]
+            (ffi/await
+              (ffi/write-expiring-values transaction
+                                         {:entries [[record-key (codec/encode-revision keychain {:record-key record-key :revision undo})]]
+                                          :expires-at expires-at})))
           (ffi/await
             (ffi/write-values transaction
-                              (revision-records keychain revision)))
+                              (current-state-records keychain revision next-head)))
           (ffi/await (ffi/commit-transaction transaction))
           revision)
         (catch Exception error

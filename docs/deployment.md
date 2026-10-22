@@ -22,6 +22,13 @@ tokens must use RS256 and include the configured issuer, audience, expiration,
 and a nonempty `sub`. See [authentication](authentication.md).
 `PORT` optionally changes the listening port.
 
+`REVISION_RETENTION_DAYS` sets revision history retention in days (default: 30).
+HEAD and current pages never expire, including for inactive databases. Undo
+records retain the previous state for at least this period after an update;
+SlateDB removes expired records during compaction. Retention changes apply to
+future writes and cannot recover history already removed. A shorter setting
+does not let a newer undo record expire before its predecessor.
+
 Use a dedicated GCS bucket. A URL path such as `gs://bucket/prefix` does not
 provide application-level prefix isolation; use the bucket-only URL. Database
 IDs supply the object paths. Keep the same KMS key and its old decryptable key

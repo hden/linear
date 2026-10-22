@@ -7,14 +7,18 @@
    [linear.adapter.slatedb.store]
    [linear.adapter.sqlite.evaluator]
    [linear.test :refer [catch-ex-data run]]
+   [linear.test-data.sqlite :as sqlite-data]
    [linear.usecase.core :as core]
    [linear.usecase.database :as database]
+   [linear.usecase.database.evaluator :as evaluator]
    [linear.usecase.database.revisions :as revisions]
    [linear.usecase.grant :as grant]
    [linear.usecase.vault :as vault]
    [next.jdbc :as jdbc]
    [next.jdbc.result-set :as result-set])
   (:import
+   (java.nio.file Files)
+   (java.sql DriverManager)
    (java.util Arrays)))
 
 (def ^:private components
@@ -177,3 +181,38 @@
         (vault/delete! ctx {:actor "manager" :vault-id source-vault})
         (is (= ::anomaly/conflict (::anomaly/category
                                     (catch-ex-data #(database/create! ctx (assoc (create-args target-vault) :source {:database-id source-id}))))))))))
+
+(defn- auto-vacuum-pages []
+  (let [path (Files/createTempFile "linear-auto-vacuum" ".db"
+                                   (make-array java.nio.file.attribute.FileAttribute 0))]
+    (try
+      (with-open [connection (DriverManager/getConnection (str "jdbc:sqlite:" path))
+                  statement (.createStatement connection)]
+        (.execute statement "PRAGMA auto_vacuum=FULL")
+        (.execute statement "PRAGMA journal_mode=WAL")
+        (.execute statement "CREATE TABLE payload (id INTEGER PRIMARY KEY, data BLOB)"))
+      (sqlite-data/pages {:image (Files/readAllBytes path)})
+      (finally (Files/deleteIfExists path)))))
+
+(deftest ^:integration sqlite-shrink-and-regrowth-preserve-historical-page-images
+  (with-system [system (run {:keys components})]
+    (let [ctx (context system)
+          pages (auto-vacuum-pages)
+          initializer (reify evaluator/Initializer
+                        (-initial-revision [_]
+                          {:revision-id "r-auto-vacuum" :parent nil :database-page-count (count pages) :pages pages}))
+          id (database/create! (assoc ctx ::core/evaluator initializer) (create-args (new-vault ctx "manager")))
+          args {:actor "manager" :database-id id}
+          fill-sql (str "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<64) "
+                        "INSERT INTO payload SELECT x, zeroblob(4096) FROM n")
+          push (fn [sqls] (database/push! ctx (assoc args :command {:statements (mapv #(hash-map :sql % :parameters []) sqls)})))]
+      (push [fill-sql])
+      (let [large (database/pull ctx args)]
+        (push ["DELETE FROM payload"])
+        (let [small (database/pull ctx args)]
+          (is (< (:database-page-count small) (:database-page-count large)))
+          (push [fill-sql])
+          (doseq [expected [large small]]
+            (let [actual (database/pull ctx (assoc args :server-revision (:server-revision expected)))]
+              (is (= (:database-page-count expected) (:database-page-count actual)))
+              (is (= (update-vals (:pages expected) seq) (update-vals (:pages actual) seq))))))))))
