@@ -54,8 +54,7 @@ gcloud auth application-default login --project=YOUR_PROJECT
 ```
 
 Mount the resulting ADC JSON read-only as below. On GCP, an attached service
-account can provide ADC without a file mount; that configuration was not part
-of the local E2E verification. See Google's
+account can provide ADC without a file mount. See Google's
 [ADC documentation](https://docs.cloud.google.com/docs/authentication/application-default-credentials).
 
 ## Minimal Compose deployment
@@ -106,12 +105,10 @@ curl --fail http://localhost:3000/health/ready
 ```
 
 Both health routes are public and should return HTTP 200. Readiness checks
-PostgreSQL and SQLite; it is not a complete KMS/GCS access check. Run the
+PostgreSQL and SQLite. Run the
 [real-token E2E command](testing.md#real-token-e2e) against a disposable database
 and bucket to exercise authenticated sync. Put TLS in front of the service
 when exposing it beyond localhost.
 
 Pin a version or manifest digest and back up PostgreSQL and GCS before an
 upgrade. Preserve the KMS key versions needed to decrypt those backups.
-Restart persistence with GCS and data compatibility between image versions
-have not been verified. Health checks alone do not establish either guarantee.
