@@ -84,6 +84,8 @@
               (malformed "Pull client revision has an invalid wire type"))
           4 (if (= 0 wire-type)
               (let [[value end] (read-varint data next-offset)]
+                (when-not (<= 0 value 0xffffffff)
+                  (malformed "Pull long poll timeout must be a uint32"))
                 (recur (long end) (assoc pull :long-poll-timeout-ms value)))
               (malformed "Pull long poll timeout has an invalid wire type"))
           5 (if (= 2 wire-type)

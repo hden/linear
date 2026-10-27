@@ -99,3 +99,76 @@
       (is (thrown? clojure.lang.ExceptionInfo (database/pull ctx pull-args)))
       (restore-fn ctx (assoc args :token token))
       (is (= (seq page) (seq (get-in (database/pull ctx pull-args) [:pages 1])))))))
+
+(deftest ^:integration long-poll-caps-waiting-and-closes-read-scopes-before-awaiting
+  (with-system [system (run {:keys [:duct.database/sql :duct.migrator/ragtime
+                                    :linear.adapter.slatedb.store/store]})]
+    (let [datasource (:duct.database.sql/hikaricp system)
+          store (:linear.adapter.slatedb.store/store system)
+          {:keys [database-id key-protection keychain]}
+          (postgres-data/create-database! {:datasource datasource})
+          connection (atom nil)
+          viewing? (atom false)
+          waits (atom [])
+          transactable (reify transaction/Transactable
+                         (-transact [_ f options]
+                           (transaction/-transact datasource
+                                                  (fn [tx] (reset! connection tx) (f tx)) options)))
+          reader (reify
+                   revisions/ConsistentReadable
+                   (-read-consistently [_ f database]
+                     (revisions/-read-consistently store
+                       (fn [view]
+                         (reset! viewing? true)
+                         (try (f view) (finally (reset! viewing? false))))
+                       database))
+                   revisions/RevisionAwaitable
+                   (-await-revision [_ args]
+                     (is (false? @viewing?))
+                     (is (.isClosed ^java.sql.Connection @connection))
+                     (swap! waits conj (select-keys args [:revision-id :timeout-ms]))
+                     false))
+          context {::core/database transactable ::core/key-service key-protection
+                   ::core/revision-store reader ::core/max-long-poll-timeout-ms 40}
+          args {:actor "actor-1" :database-id database-id}]
+      (slatedb-data/store-root! {:store store :database-id database-id :keychain keychain :pages {}})
+      (doseq [options [{:long-poll-timeout-ms 5000}
+                       {:client-revision "r-root" :long-poll-timeout-ms 0}
+                       {:client-revision "r-root" :server-revision "r-root" :long-poll-timeout-ms 5000}]]
+        (is (= "r-root" (:server-revision (database/pull context (merge args options))))))
+      (is (empty? @waits))
+      (doseq [timeout [10 5000 0xffffffff]]
+        (is (= {} (:pages (database/pull context (assoc args :client-revision "r-root"
+                                                   :long-poll-timeout-ms timeout))))))
+      (is (= [{:revision-id "r-root" :timeout-ms 10}
+              {:revision-id "r-root" :timeout-ms 40}
+              {:revision-id "r-root" :timeout-ms 40}] @waits))
+      (revisions/publish-next! store
+        {:database {:id database-id :vault {:keychain keychain}}
+         :revision {:revision-id "r-next" :parent "r-root" :database-page-count 1 :pages {1 (byte-array [7])}}})
+      (let [result (database/pull context (assoc args :client-revision "r-root" :long-poll-timeout-ms 5000))]
+        (is (= "r-next" (:server-revision result)))
+        (is (= {1 '(7)} (update-vals (:pages result) seq)))
+        (is (= 3 (count @waits)))))))
+
+(deftest ^:integration long-poll-rechecks-database-access-after-waiting
+  (with-system [system (run {:keys [:duct.database/sql :duct.migrator/ragtime
+                                    :linear.adapter.slatedb.store/store]})]
+    (let [datasource (:duct.database.sql/hikaricp system)
+          store (:linear.adapter.slatedb.store/store system)
+          {:keys [database-id key-protection keychain]}
+          (postgres-data/create-database! {:datasource datasource})
+          context {::core/database datasource ::core/key-service key-protection ::core/revision-store store}
+          args {:actor "actor-1" :database-id database-id}
+          reader (reify
+                   revisions/ConsistentReadable
+                   (-read-consistently [_ f database] (revisions/-read-consistently store f database))
+                   revisions/RevisionAwaitable
+                   (-await-revision [_ _]
+                     (database/close! context args)
+                     false))]
+      (slatedb-data/store-root! {:store store :database-id database-id :keychain keychain :pages {}})
+      (is (= ::database/database-not-found
+             (:reason (linear.test/catch-ex-data
+                        #(database/pull (assoc context ::core/revision-store reader)
+                                        (assoc args :client-revision "r-root" :long-poll-timeout-ms 100)))))))))

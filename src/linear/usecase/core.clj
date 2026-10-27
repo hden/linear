@@ -28,5 +28,15 @@
   [{::keys [revision-store]}]
   revision-store)
 
+(defn revision-awaitable
+  [{::keys [revision-store]}]
+  revision-store)
+
+(defn max-long-poll-timeout-ms
+  {:malli/schema [:-> :map pos-int?]}
+  [{::keys [max-long-poll-timeout-ms]
+    :or {max-long-poll-timeout-ms 5000}}]
+  max-long-poll-timeout-ms)
+
 (defn checkables [context]
   [(transactable context) (evaluator context)])

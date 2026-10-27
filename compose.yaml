@@ -27,6 +27,7 @@ services:
       JDBC_DATABASE_URL: jdbc:postgresql://postgres:5432/linear?user=postgres&password=postgres
       SLATEDB_OBJECT_STORE_URL: memory:///
       REVISION_RETENTION_DAYS:
+      MAX_LONG_POLL_TIMEOUT_MS:
       LINEAR_DEPLOYMENT_TARGET:
       GCP_KMS_KEY_NAME:
       OIDC_ISSUER:

@@ -31,7 +31,6 @@
 (defn- validate-options [pull]
   (when (or (not (zero? (get pull :encoding 0)))
             (not (zero? (get pull :stream-kind 0)))
-            (not (zero? (get pull :long-poll-timeout-ms 0)))
             (seq (:server-query-selector pull))
             (seq (:client-pages pull)))
     (throw (ex-info "Pull option is not supported"
@@ -45,6 +44,7 @@
             _ (validate-options pull)
             result  (database/pull context {:server-revision (not-empty (:server-revision pull))
                                             :client-revision (not-empty (:client-revision pull))
+                                            :long-poll-timeout-ms (get pull :long-poll-timeout-ms 0)
                                             :page-ids (protobuf/decode-page-selector
                                                         (:server-pages-selector pull))
                                             :actor (:sub identity)

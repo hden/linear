@@ -12,7 +12,8 @@ E2E scenarios, run by [CI](../.github/workflows/ci.yml) on Linux x64.
 | Retry after a lost push response | Supported; applied progress prevents duplicate SQL execution |
 | Atomic application data and sync progress | Supported; committed in the same revision |
 | SQL failure | Entire batch rolls back; COMMIT reports `TRANSACTION_ROLLED_BACK` |
-| Query partial sync and long polling | Unsupported |
+| Bounded long polling | Supported; official SDK early-response and reconnect scenarios are covered by E2E |
+| Query partial sync | Unsupported |
 | MVCC and experimental remote writes | Outside the verified compatibility scope |
 
 ## Limitations
@@ -24,6 +25,34 @@ E2E scenarios, run by [CI](../.github/workflows/ci.yml) on Linux x64.
   generations return a conflict; unsupported pull options return HTTP 400.
 - Clients from earlier Linear versions need fresh local bootstrap because those
   versions discarded sync progress, which cannot be reconstructed.
+
+## Long polling
+
+`long_poll_timeout_ms` applies when the client supplies `client_revision` and
+omits `server_revision`. An available revision returns immediately. Otherwise,
+Linear waits for at most the smaller of the requested duration and
+`MAX_LONG_POLL_TIMEOUT_MS` (default **5000 ms**). Zero requests an immediate pull.
+The limit bounds waiting, not the total time spent reading storage or sending
+the response. A request above the limit receives a normal response, not an error.
+
+The five-second default follows the explicit value in the upstream v0.8.3
+[browser example](https://github.com/tursodatabase/turso/blob/v0.8.3/examples/javascript/sync-wasm-vite/index.html#L50-L55).
+It is an operational limit, not a mobile-network connection guarantee. Configure
+the deployment's HTTP timeouts with room for storage and response processing.
+
+The SlateDB adapter checks HEAD through fresh snapshots and sleeps for at most
+100 ms between checks. Each check releases its snapshot and database lease before sleeping.
+Waiting holds no PostgreSQL transaction and creates no subscriptions or detached
+tasks. This uses the existing SlateDB binding without a notification registry
+or application locks. Authorization and database state are checked again before
+the final pull.
+
+The HTTP handler is synchronous. A disconnected request can keep waiting until
+its bounded deadline; it does not cancel immediately on socket closure.
+[Transport tests](../test/linear/handler/turso/long_poll_test.clj) repeatedly close
+TCP connections during waits and verify that the waits finish. The official SDK
+E2E checks capped empty responses, subsequent pulls, updates during waiting, and
+recovery after an aborted request.
 
 ## SDK 0.8.3 update
 
@@ -42,7 +71,6 @@ implementation or verification work, not passing claims for Linear:
 | [Python `test_partial_sync`](https://github.com/tursodatabase/turso/blob/v0.8.3/bindings/python/tests/test_database_sync.py) | Query bootstrap; page selection via `server_pages_selector` is implemented locally. |
 | [JavaScript partial-sync tests](https://github.com/tursodatabase/turso/blob/v0.8.3/bindings/javascript/sync/packages/native/promise.test.ts) | Partial-sync concurrency, segment size, and prefetch. |
 | [Python `test_pull_bytes_threshold`](https://github.com/tursodatabase/turso/blob/v0.8.3/bindings/python/tests/test_database_sync.py) | Upstream edge cases beyond the repeated selector-based pulls covered by E2E. |
-| [`PullUpdatesReqProtoBody.long_poll_timeout_ms`](https://github.com/tursodatabase/turso/blob/v0.8.3/sync/engine/src/server_proto.rs) | Long-poll wake-up on a newly published revision. |
 
 Upstream includes a [CLI sync server](https://github.com/tursodatabase/turso/blob/v0.8.3/cli/sync_server.rs)
 with page-selector support. Its JavaScript partial-sync tests skip that server

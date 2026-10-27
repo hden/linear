@@ -11,6 +11,9 @@
         revision-retention-days  {:env "REVISION_RETENTION_DAYS"
                                   :type :int
                                   :default 30}
+        max-long-poll-timeout-ms {:env "MAX_LONG_POLL_TIMEOUT_MS"
+                                  :type :int
+                                  :default 5000}
         sqlite-vfs-name          {:env "SQLITE_VFS_NAME"
                                   :default "linear-sqlite"}
         deployment-target        {:env "LINEAR_DEPLOYMENT_TARGET"
@@ -56,7 +59,8 @@
                      :linear.usecase.core/database       #ig/ref :linear.adapter.postgres/datasource
                      :linear.usecase.core/revision-store #ig/ref :linear.adapter.slatedb.store/store
                      :linear.usecase.core/evaluator      #ig/ref :linear.adapter.sqlite.evaluator/evaluator
-                     :linear.usecase.core/key-service    #ig/ref :linear.adapter.crypto/key-service}
+                     :linear.usecase.core/key-service    #ig/ref :linear.adapter.crypto/key-service
+                     :linear.usecase.core/max-long-poll-timeout-ms #ig/var max-long-poll-timeout-ms}
                     :middleware-opts
                     {:provider #ig/ref :duct.auth.jwks/provider
                      :issuer #ig/var oidc-issuer

@@ -22,6 +22,7 @@ The [E2E scenario](../test/e2e/turso-sync.mjs) covers:
 
 - HTTP resource creation, empty bootstrap, rename, closure, and closed-source recovery;
 - incremental pull, local-write push, concurrent merge, and chunked pull;
+- bounded long polling, repeated early responses, updates during waiting, and aborted-pull recovery;
 - lost-response retries, reconnect, SQL constraints, and DDL rollback;
 - pull-only bootstrap with push denied, and ungranted bootstrap denied.
 

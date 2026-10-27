@@ -125,7 +125,21 @@
 
   revisions/RevisionWritable
   (-publish-next! [store revision database]
-    (publish! store revision database false)))
+    (publish! store revision database false))
+
+  revisions/RevisionAwaitable
+  (-await-revision [store {:keys [database revision-id timeout-ms]}]
+    (let [deadline (+ (System/nanoTime) (* timeout-ms 1000000))]
+      (loop []
+        (let [current-revision-id (with-consistent-view store database
+                                    #(revisions/revision-id (revisions/head %)))
+              remaining (- deadline (System/nanoTime))]
+          (cond
+            (not= current-revision-id revision-id) true
+            (not (pos? remaining)) false
+            :else (do
+                    (Thread/sleep (long (min 100 (max 1 (quot remaining 1000000)))))
+                    (recur))))))))
 
 (defmethod integrant/init-key :linear.adapter.slatedb.store/store
   [_ options]
