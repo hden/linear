@@ -85,7 +85,8 @@
           system (test/run {:config   (config)
                             :keys     #{:duct.server.http/jetty}
                             :profiles [:test :main]
-                            :vars     (assoc (jwt/oidc-vars fixture) 'port 0)})]
+                            :vars     (assoc (jwt/oidc-vars fixture)
+                                        'port 0 'max-long-poll-timeout-ms 5000)})]
       (try
         (run-client! (server-url system)
                      {"LINEAR_E2E_MANAGER_TOKEN" (jwt/access-token fixture {:subject manager})
