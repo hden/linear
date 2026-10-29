@@ -26,7 +26,7 @@
         buddy/buddy-sign                    {:mvn/version "3.6.1-359"}}
  :aliases
  {:test {:extra-paths ["test"]
-         :extra-deps {org.xerial/sqlite-jdbc {:mvn/version "3.53.4.0"}
+         :extra-deps {org.xerial/sqlite-jdbc {:mvn/version "3.54.1.0"}
                       ring/ring-mock       {:mvn/version "0.6.2"}}}
   :duct {:jvm-opts ["--enable-native-access=ALL-UNNAMED"]
          :main-opts ["-m" "duct.main"]}
@@ -54,7 +54,7 @@
   :cov  {:extra-paths ["test"]
          :extra-deps {cloverage/cloverage       {:mvn/version "1.2.4"}
                       ring/ring-mock            {:mvn/version "0.6.2"}
-                      org.xerial/sqlite-jdbc     {:mvn/version "3.53.4.0"}}
+                      org.xerial/sqlite-jdbc     {:mvn/version "3.54.1.0"}}
          :jvm-opts ["--enable-native-access=ALL-UNNAMED"]
          :main-opts ["-m" "cloverage.coverage"
                      "-p" "src"
@@ -70,6 +70,6 @@
   :crap-check {:extra-paths ["scripts"]
                :main-opts ["-m" "linear.crap"]}
   :e2e {:extra-paths ["test"]
-        :extra-deps {org.xerial/sqlite-jdbc {:mvn/version "3.53.4.0"}}
+        :extra-deps {org.xerial/sqlite-jdbc {:mvn/version "3.54.1.0"}}
         :jvm-opts ["--enable-native-access=ALL-UNNAMED"]
         :main-opts ["-m" "linear.e2e"]}}}
