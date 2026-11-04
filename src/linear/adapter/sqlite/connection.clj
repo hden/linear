@@ -288,47 +288,45 @@
                       (sqlite-diagnostics database result)))))
     (catch Exception error error)))
 
-(defmacro ^:private with-statement
-  [[binding connection options] & body]
-  `(let [connection# ~connection
-         options# ~options]
-     (ensure-open! connection#)
-     (let [database# (:handle connection#)]
-       (with-open [arena# (mem/confined-arena)]
-         (let [statement# (prepare! database# arena# (:sql options#))
-               finalization-error# (volatile! nil)
-               outcome# (try
-                          (bind-parameters! database# statement# arena# (:parameters options#))
-                          {:value (let [~binding statement#] ~@body)}
-                          (catch Exception error# {:error error#})
-                          (finally
-                            (vreset! finalization-error#
-                                     (statement-finalization-error database# statement#))))]
-           (cond
-             (:error outcome#) (throw (add-suppressed! (:error outcome#) @finalization-error#))
-             @finalization-error# (throw @finalization-error#)
-             :else (:value outcome#)))))))
+(defn- with-statement [connection {:keys [sql parameters]} f]
+  (ensure-open! connection)
+  (let [database (:handle connection)]
+    (with-open [arena (mem/confined-arena)]
+      (let [statement (prepare! database arena sql)
+            finalization-error (volatile! nil)
+            outcome (try
+                      (bind-parameters! database statement arena parameters)
+                      {:value (f database statement)}
+                      (catch Exception error {:error error})
+                      (finally
+                        (vreset! finalization-error
+                                 (statement-finalization-error database statement))))]
+        (cond
+          (:error outcome) (throw (add-suppressed! (:error outcome) @finalization-error))
+          @finalization-error (throw @finalization-error)
+          :else (:value outcome))))))
 
 (defn execute-statement
   {:malli/schema [:-> ::connection ::evaluator/statement :nil]}
   [connection arg-map]
-  (with-statement [statement connection arg-map]
-    (step-to-completion! (:handle connection) statement)))
+  (with-statement connection arg-map step-to-completion!))
 
 (defn query-integers
   {:malli/schema [:-> ::connection ::evaluator/statement [:maybe [:vector :int]]]}
   [connection arg-map]
-  (with-statement [statement connection arg-map]
-    (let [result (ffi/step statement)]
-      (cond
-        (= ffi/sqlite-done result) nil
-        (= ffi/sqlite-row result)
-        (mapv (fn [index]
-                (when-not (= 1 (ffi/column-type statement {:index index}))
-                  (fault "SQLite query returned a non-integer column" {:index index}))
-                (ffi/column-int64 statement {:index index}))
-              (range (ffi/column-count statement)))
-        :else (fault "SQLite query failed" (sqlite-diagnostics (:handle connection) result))))))
+  (with-statement
+    connection arg-map
+    (fn [database statement]
+      (let [result (ffi/step statement)]
+        (cond
+          (= ffi/sqlite-done result) nil
+          (= ffi/sqlite-row result)
+          (mapv (fn [index]
+                  (when-not (= 1 (ffi/column-type statement {:index index}))
+                    (fault "SQLite query returned a non-integer column" {:index index}))
+                  (ffi/column-int64 statement {:index index}))
+                (range (ffi/column-count statement)))
+          :else (fault "SQLite query failed" (sqlite-diagnostics database result)))))))
 
 (defn close
   {:malli/schema [:-> ::connection :nil]}
