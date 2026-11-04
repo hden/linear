@@ -247,7 +247,10 @@ application namespaces. `bb architecture` and `bb policy:check` remain focused
 commands for dependency rules and source policies respectively.
 
 Policy checks inspect `src`, `test`, `scripts`, and `.clj-kondo/hooks` with fixed
-analysis settings. Global Var replacement has no exceptions. Dynamic code and
+analysis settings. Prefer Clojure native data structures and primitives:
+`locking` and direct monitor operations (`monitor-enter`, `monitor-exit`) are
+forbidden. Use atoms or refs for coordinated state changes and Promesa for
+asynchronous work. Global Var replacement has no exceptions. Dynamic code and
 name resolution require an exact calling var, target, and reason in the checker;
 there are currently no approved dynamic references. Namespace-wide exemptions
 and inline lint suppression are forbidden. Missing sources, parse failures,

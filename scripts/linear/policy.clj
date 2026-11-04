@@ -32,6 +32,9 @@
   (let [from-layer (layer from)
         application-source? (boolean (re-find #"(?:^|/)src/" filename))]
     (cond
+      (= to 'clojure.core/locking)
+      [:locking "locking is forbidden; prefer Clojure native data structures and primitives"]
+
       (forbidden-vars to)
       [:global-var-mutation "global Var replacement is forbidden; provide a capability instead"]
 
@@ -107,6 +110,10 @@
               finding (fn [value rule message]
                         {:filename filename :row row :from 'source :to value :rule rule :message message})]
           (concat
+            (when (and (api/token-node? node)
+                       (#{'monitor-enter 'monitor-exit
+                          'clojure.core/monitor-enter 'clojure.core/monitor-exit} (api/sexpr node)))
+              [(finding (api/sexpr node) :locking "direct monitor operations are forbidden; prefer Clojure native data structures and primitives")])
             (when (and (api/token-node? node) (root-mutating-methods (api/sexpr node)))
               [(finding (api/sexpr node) :global-var-mutation "direct Var root mutation is forbidden")])
             (when (api/map-node? node)
