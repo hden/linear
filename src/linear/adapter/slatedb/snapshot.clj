@@ -14,7 +14,7 @@
                       {::anomaly/category ::anomaly/not-found
                        :reason ::revisions/head-not-found})))))
 
-(defn- read-undo-record [read-values keychain head]
+(defn- read-undo-record [read-values {:keys [keychain head]}]
   (let [revision-id (:revision-id head)
         record-key (key/revision revision-id)
         [value] (read-values [record-key])]
@@ -26,14 +26,14 @@
                            :expired? expired?
                            :revision-id revision-id}))))))
 
-(defn- ensure-unvisited! [seen revision-id]
+(defn- ensure-unvisited! [seen {:keys [revision-id]}]
   (when (contains? seen revision-id)
     (throw (ex-info "Revision chain contains a cycle"
                     {::anomaly/category ::anomaly/fault
                      :reason ::revisions/revision-cycle
                      :revision-id revision-id}))))
 
-(defn- state-at-revision [read-values keychain head target-revision-id restore-pages?]
+(defn- state-at-revision [read-values {:keys [keychain head target-revision-id restore-pages?]}]
   (loop [head head
          pages {}
          seen #{}]
@@ -49,13 +49,14 @@
 
       :else
       (do
-        (ensure-unvisited! seen (:revision-id head))
-        (let [revision (read-undo-record read-values keychain head)]
+        (ensure-unvisited! seen {:revision-id (:revision-id head)})
+        (let [revision (read-undo-record read-values {:keychain keychain
+                                                      :head head})]
           (recur (:parent revision)
                  (if restore-pages? (merge pages (:undo-pages revision)) pages)
                  (conj seen (:revision-id head))))))))
 
-(defn- changed-page-ids [read-values keychain head client-revision-id]
+(defn- changed-page-ids [read-values {:keys [keychain head client-revision-id]}]
   (loop [head head
          page-ids #{}
          seen #{}]
@@ -70,13 +71,14 @@
 
       :else
       (do
-        (ensure-unvisited! seen (:revision-id head))
-        (let [revision (read-undo-record read-values keychain head)]
+        (ensure-unvisited! seen {:revision-id (:revision-id head)})
+        (let [revision (read-undo-record read-values {:keychain keychain
+                                                      :head head})]
           (recur (:parent revision)
                  (into page-ids (keys (:undo-pages revision)))
                  (conj seen (:revision-id head))))))))
 
-(defn- fetch-pages [read-values keychain {:keys [metadata undo-pages]} page-ids]
+(defn- fetch-pages [read-values {keychain :keychain, {:keys [metadata undo-pages]} :options, page-ids :page-ids}]
   (let [page-count (:database-page-count metadata)
         current-ids (vec (filter #(and (<= % page-count)
                                     (not (contains? undo-pages %)))
@@ -107,7 +109,9 @@
   (-size [_]
     (get-in state [:metadata :database-page-count]))
   (-fetch-pages-by-ids [_ {:keys [ids]}]
-    (fetch-pages read-values keychain state ids)))
+    (fetch-pages read-values {:keychain keychain
+                              :options state
+                              :page-ids ids})))
 
 (defrecord ^:private ConsistentView [read-values keychain]
   revisions/ConsistentView
@@ -115,10 +119,18 @@
     (->Snapshot read-values keychain {:metadata (head-metadata read-values) :undo-pages {}}))
   (-as-of [_ revision-id]
     (->Snapshot read-values keychain
-                (state-at-revision read-values keychain (head-metadata read-values) revision-id true)))
+                (state-at-revision read-values {:keychain keychain
+                                                :head (head-metadata read-values)
+                                                :target-revision-id revision-id
+                                                :restore-pages? true})))
   (-changes-since [_ target-revision-id client-revision-id]
-    (let [state (state-at-revision read-values keychain (head-metadata read-values) target-revision-id false)]
-      (changed-page-ids read-values keychain (:metadata state) client-revision-id))))
+    (let [state (state-at-revision read-values {:keychain keychain
+                                                :head (head-metadata read-values)
+                                                :target-revision-id target-revision-id
+                                                :restore-pages? false})]
+      (changed-page-ids read-values {:keychain keychain
+                                     :head (:metadata state)
+                                     :client-revision-id client-revision-id}))))
 
 (defn consistent-view [{:keys [read-values keychain]}]
   (->ConsistentView read-values keychain))

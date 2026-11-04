@@ -12,12 +12,15 @@
  :hooks
  {:analyze-call
   {labrador.core/defretriever hooks.labrador.core/defretriever
-   clojure.core/defn hooks.linear.public-api/check-definition}}
+   clojure.core/defn hooks.linear.public-api/check-definition
+   clojure.core/defn- hooks.linear.public-api/check-definition}}
  :linters
  {:linear/public-api
   {:level :error
    :exceptions
-   {[linear.adapter.slatedb.ffi/open-database! 2] "Matches the SlateDB native API argument order."
+   {[linear.adapter.sqlite.connection/authorize 6] "SQLite authorizer callback ABI supplies six positional arguments."
+    [linear.kaocha/anomaly-reporter 2] "Malli instrumentation calls reporters with type and data."
+    [linear.adapter.slatedb.ffi/open-database! 2] "Matches the SlateDB native API argument order."
     [linear.adapter.slatedb.ffi/read-snapshot-values 2] "Matches the SlateDB native API argument order."
     [linear.adapter.slatedb.ffi/read-transaction-values 2] "Matches the SlateDB native API argument order."
     [linear.adapter.slatedb.ffi/write-values 2] "Matches the SlateDB native API argument order."

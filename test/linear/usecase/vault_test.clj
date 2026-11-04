@@ -21,13 +21,13 @@
 
    ::core/key-service     (crypto/open {:key-id "dev-ephemeral"})})
 
-(defn- row-count [datasource table where]
+(defn- row-count [datasource {:keys [table where]}]
   (postgres/query datasource {:statement {:select [[[:count :*] :count]]
                                           :from table
                                           :where where}
                               :parse-fn #(get-in % [0 :count])}))
 
-(defn- fail-after-initial-grants [datasource created-ids]
+(defn- fail-after-initial-grants [datasource {:keys [created-ids]}]
   (reify transaction/Transactable
     (-transact [_ f options]
       (transaction/-transact
@@ -111,17 +111,16 @@
                              failure))]
         (is (= created-ids replayed-ids))
         (is (= ::anomaly/forbidden (-> read-error ex-data ::anomaly/category)))
-        (is (= 1 (row-count datasource
-                            :transactions
-                            [:and
-                             [:= :actor "actor-1"]
-                             [:= :idempotency-key key]])))
-        (is (= 1 (row-count datasource :vaults [:= :id id])))
-        (is (zero? (row-count datasource
-                              :vault-grants
-                              [:and
-                               [:= :vault-id id]
-                               [:= :subject "actor-1"]])))))))
+        (is (= 1 (row-count datasource {:table :transactions
+                                        :where [:and
+                                                [:= :actor "actor-1"]
+                                                [:= :idempotency-key key]]})))
+        (is (= 1 (row-count datasource {:table :vaults
+                                        :where [:= :id id]})))
+        (is (zero? (row-count datasource {:table :vault-grants
+                                          :where [:and
+                                                  [:= :vault-id id]
+                                                  [:= :subject "actor-1"]]})))))))
 
 (deftest ^:integration initial-grant-failure-rolls-back-vault-creation
   (with-system [sys (run {:keys [:duct.database/sql
@@ -131,7 +130,7 @@
           actor        (str "rollback-actor-" (random-uuid))
           key          (str "vault-rollback-" (random-uuid))
           created-ids  (atom nil)
-          database     (fail-after-initial-grants datasource created-ids)
+          database     (fail-after-initial-grants datasource {:created-ids created-ids})
           failure-data (try
                          (vault/create! (assoc context ::core/database database)
                                         {:actor actor
@@ -143,13 +142,14 @@
           vault-id     (first @created-ids)]
       (is (= ::forced-grant-failure (:reason failure-data)))
       (is (string? vault-id))
-      (is (zero? (row-count datasource
-                            :transactions
-                            [:and
-                             [:= :actor actor]
-                             [:= :idempotency-key key]])))
-      (is (zero? (row-count datasource :vaults [:= :id vault-id])))
-      (is (zero? (row-count datasource :vault-grants [:= :vault-id vault-id]))))))
+      (is (zero? (row-count datasource {:table :transactions
+                                        :where [:and
+                                                [:= :actor actor]
+                                                [:= :idempotency-key key]]})))
+      (is (zero? (row-count datasource {:table :vaults
+                                        :where [:= :id vault-id]})))
+      (is (zero? (row-count datasource {:table :vault-grants
+                                        :where [:= :vault-id vault-id]}))))))
 
 (deftest ^:integration concurrent-idempotent-creation-returns-one-vault
   (with-system [sys (run {:keys [:duct.database/sql
@@ -183,12 +183,12 @@
             (let [created (mapv :ids results)
                   id      (-> created first first)]
               (is (= (first created) (second created)))
-              (is (= 1 (row-count datasource
-                                  :transactions
-                                  [:and
-                                   [:= :actor actor]
-                                   [:= :idempotency-key key]])))
-              (is (= 1 (row-count datasource :vaults [:= :id id])))
+              (is (= 1 (row-count datasource {:table :transactions
+                                              :where [:and
+                                                      [:= :actor actor]
+                                                      [:= :idempotency-key key]]})))
+              (is (= 1 (row-count datasource {:table :vaults
+                                              :where [:= :id id]})))
               (is (= [{:subject actor :permission :manage}]
                      (grant/list-grants context {:actor actor :vault-id id}))))))
         (finally
@@ -211,7 +211,8 @@
           first-id   (first first-ids)
           second-id  (first second-ids)]
       (is (not= first-id second-id))
-      (is (= 2 (row-count datasource :transactions [:= :idempotency-key key])))
+      (is (= 2 (row-count datasource {:table :transactions
+                                      :where [:= :idempotency-key key]})))
       (is (= [{:subject "actor-1" :permission :manage}]
              (grant/list-grants context {:actor "actor-1" :vault-id first-id})))
       (is (= [{:subject "actor-2" :permission :manage}]
@@ -318,7 +319,8 @@
       (parallel [#(delete-fn ctx args) #(restore-fn ctx (assoc args :token token))])
       (is (contains? #{:active :deleted} (:state (state-fn ctx args))))
       (restore-fn ctx (assoc args :token token))
-      (is (= 1 (row-count datasource :vaults [:= :id id])))
+      (is (= 1 (row-count datasource {:table :vaults
+                                      :where [:= :id id]})))
       (is (= [{:subject "owner" :permission :manage}] (grant/list-grants ctx args))))))
 
 (deftest ^:integration recovery-authenticates-envelope-and-retains-deleted-state-on-failure

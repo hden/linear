@@ -222,6 +222,37 @@ such as `Database`, a constructor named for its direct result such as
 `keychain`, and a shared helper namespace named `core` are valid conventions.
 Naming aesthetics alone are not an architecture violation.
 
+## Function interfaces and scope callbacks
+
+Functions, including private helpers, take an argument map or `[target arg-map]`.
+Zero/one-argument value operations remain allowed. The argument-form hook checks
+`defn` and `defn-` in `src`, `test`, and `scripts`, including definitions made
+private through metadata or attribute maps. Positional exceptions require an
+exact qualified Var, arity, and concrete reason in `.clj-kondo/config.edn`.
+External ABI signatures must remain intact; existing violations are migrated,
+not approved in bulk. Namespace exemptions are not allowed.
+
+Own scope helpers receive their callback as `:f` in an argument map. Pass
+multiple resources to the callback in one map and destructure only the resources
+needed by the caller:
+
+```clojure
+(call-with-evaluation evaluator
+  {:snapshot snapshot
+   :f (fn [{:keys [database filesystem]}]
+        ...)})
+```
+
+The fixed policy analysis matches bindings destructured directly from `:f`
+(`{:keys [f]}` or `{callback :f}`) to clj-kondo local binding IDs and call
+positions. Direct calls to those bindings may have zero or one argument; core
+threading forms and `doto` include their implicit argument. Shorthand `#(...)`
+bodies are checked too. The checker does not infer callbacks from variable
+names or check all anonymous function signatures: reduce, Promesa, and FFI callbacks retain their external contracts.
+Alias forwarding, `apply`, and arbitrary macro expansion are not traced.
+Protocol methods and macros also need manual interface review. Review scope-helper inputs, callback resource
+bundles, and all matching structures throughout a diff when an issue is found.
+
 ## Validation
 
 Malli instrumentation checks boundaries controlled by Linear. Runtime
@@ -242,7 +273,7 @@ status codes and wire formats.
 ## Enforcement
 
 `bb lint` enforces static source constraints: source policies, architectural
-rules, public API rules, and ordinary clj-kondo findings. It does not load
+rules, function interface rules, and ordinary clj-kondo findings. It does not load
 application namespaces. `bb architecture` and `bb policy:check` remain focused
 commands for dependency rules and source policies respectively.
 

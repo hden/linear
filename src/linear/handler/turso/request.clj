@@ -10,7 +10,7 @@
 (def ^:private ^:const max-statements 1000)
 (def ^:const max-request-bytes (* 16 1024 1024))
 
-(defn- invalid [message reason]
+(defn- invalid [message {:keys [reason]}]
   (throw (ex-info message
                   {::anomaly/category ::anomaly/incorrect
                    ::anomaly/message message
@@ -38,7 +38,7 @@
     "text" value
     "blob" (.decode (Base64/getDecoder) ^String base64)))
 
-(defn- statement-schema [sql-schema args-schema]
+(defn- statement-schema [sql-schema {:keys [args-schema]}]
   [:map {:closed true}
    [:sql sql-schema]
    [:sql_id :nil]
@@ -80,17 +80,15 @@
                         ::begin-step
                         [:map {:closed true}
                          [:condition :nil]
-                         [:stmt (statement-schema [:= "BEGIN IMMEDIATE"]
-                                                  [:vector {:max 0} :any])]]
+                         [:stmt (statement-schema [:= "BEGIN IMMEDIATE"] {:args-schema [:vector {:max 0} :any]})]]
                         ::body-step
                         [:map {:closed true}
                          [:condition ::condition]
-                         [:stmt (statement-schema :string [:vector :map])]]
+                         [:stmt (statement-schema :string {:args-schema [:vector :map]})]]
                         ::commit-step
                         [:map {:closed true}
                          [:condition ::condition]
-                         [:stmt (statement-schema [:= "COMMIT"]
-                                                  [:vector {:max 0} :any])]]}}
+                         [:stmt (statement-schema [:= "COMMIT"] {:args-schema [:vector {:max 0} :any]})]]}}
        [:steps [:cat
                 ::begin-step
                 [:repeat {:min 0 :max max-statements} ::body-step]
@@ -127,7 +125,7 @@
                    (nil? (:sql_id statement))
                    (or (nil? (:named_args statement)) (= [] (:named_args statement)))
                    (nil? (get-in batch [:steps 0 :condition])))
-      (invalid "Sync metadata query is invalid" ::invalid-sync-metadata-query))
+      (invalid "Sync metadata query is invalid" {:reason ::invalid-sync-metadata-query}))
     (:value (first args))))
 
 (defn- command-progress [statements]
@@ -138,28 +136,26 @@
     (when (seq indexes)
       (when-not (and (= 1 (count indexes))
                      (= (first indexes) (dec (count statements))))
-        (invalid "Sync progress must be the final statement" ::invalid-sync-progress))
+        (invalid "Sync progress must be the final statement" {:reason ::invalid-sync-progress}))
       (let [parameters (:parameters (peek statements))]
         (when-not (valid-progress-parameters? parameters)
-          (invalid "Sync progress is invalid" ::invalid-sync-progress))
+          (invalid "Sync progress is invalid" {:reason ::invalid-sync-progress}))
         (let [[client-id generation change-id] parameters]
           {:client-id client-id :generation generation :change-id change-id})))))
 
-(defn- validate-limits [body-size steps]
+(defn- validate-limits [body-size {:keys [steps]}]
   (when-not (valid-request-size? body-size)
-    (invalid "Push request is too large"
-              ::request-too-large))
+    (invalid "Push request is too large" {:reason ::request-too-large}))
   (when-not (valid-step-count? steps)
-    (invalid "Push has too many statements"
-              ::too-many-statements)))
+    (invalid "Push has too many statements" {:reason ::too-many-statements})))
 
 (defn- validate-batch [batch]
   (when-not (valid-batch? batch)
-    (invalid "Push batch is not canonical" ::invalid-push-batch))
+    (invalid "Push batch is not canonical" {:reason ::invalid-push-batch}))
   (doseq [step (-> batch :steps pop rest)
           value (get-in step [:stmt :args])]
     (when-not (valid-wire-value? value)
-      (invalid "Push argument is invalid" ::invalid-value))))
+      (invalid "Push argument is invalid" {:reason ::invalid-value}))))
 
 (defn parse-command
   {:malli/schema [:->
@@ -171,7 +167,7 @@
                    [:wire-indexes [:vector nat-int?]]]]}
   [{:keys [body-size batch]}]
   (let [steps (:steps batch)]
-    (validate-limits body-size steps)
+    (validate-limits body-size {:steps steps})
     (validate-batch batch)
     (let [last-index (dec (count steps))
           body-steps (subvec steps 1 last-index)
@@ -200,4 +196,4 @@
              (= "batch" (:type request))
              (map? (:batch request)))
       (:batch request)
-      (invalid "Push pipeline must contain exactly one batch" ::invalid-pipeline))))
+      (invalid "Push pipeline must contain exactly one batch" {:reason ::invalid-pipeline}))))

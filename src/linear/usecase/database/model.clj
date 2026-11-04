@@ -44,7 +44,7 @@
                             {:snapshot (revisions/head (consistent-view database))
                              :client-id client-id}))
 
-(defn- already-applied? [database snapshot progress]
+(defn- already-applied? [database {:keys [snapshot progress]}]
   (when progress
     (when-let [stored (evaluation/sync-progress (::sync-progress-reader database)
                                                 {:snapshot snapshot :client-id (:client-id progress)})]
@@ -66,7 +66,8 @@
   [database {:as command}]
   (let [snapshot (revisions/head (consistent-view database))
         parent (revisions/revision-id snapshot)]
-    (when-not (already-applied? database snapshot (:sync-progress command))
+    (when-not (already-applied? database {:snapshot snapshot
+                                          :progress (:sync-progress command)})
       (when-let [revision (evaluation/evaluate (evaluator database)
                             {:snapshot snapshot :command command})]
         (when-not (= parent (:parent revision))
@@ -77,7 +78,7 @@
                            :actual-parent (:parent revision)})))
         revision))))
 
-(defn- changed-page-ids [view target-revision client-revision page-count]
+(defn- changed-page-ids [view {:keys [target-revision client-revision page-count]}]
   (cond
     (not client-revision) (set (range 1 (inc page-count)))
     (= client-revision target-revision) #{}
@@ -109,7 +110,9 @@
                    (revisions/head view))
         target-revision (revisions/revision-id snapshot)
         page-count (revisions/size snapshot)
-        changed-page-ids (changed-page-ids view target-revision client-revision page-count)
+        changed-page-ids (changed-page-ids view {:target-revision target-revision
+                                                 :client-revision client-revision
+                                                 :page-count page-count})
         selected-page-ids (into #{}
                                 (filter #(and (<= % page-count)
                                               (or (nil? page-ids) (contains? page-ids %))))

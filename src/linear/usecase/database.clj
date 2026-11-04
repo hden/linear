@@ -31,7 +31,7 @@
            {::anomaly/category ::anomaly/not-found
             :reason ::database-not-found :database-id id}))
 
-(defn- authorized-resource [tx {:keys [actor database-id] :as arg-map} permission]
+(defn- authorized-resource [tx {:keys [permission] {:keys [actor database-id] :as arg-map} :arg-map}]
   (let [resource (or (-read tx arg-map) (throw (resource-not-found database-id)))]
     (grant/require-permission tx {:actor actor :vault-id (:vault-id resource) :permission permission})
     resource))
@@ -40,7 +40,8 @@
   {:malli/schema [:-> :map [:map [:actor :string] [:database-id ::model/database-id]] ::resource]}
   [context arg-map]
   (transaction/with-transaction [tx (core/transactable context) {:read-only true}]
-    (authorized-resource tx arg-map :pull)))
+    (authorized-resource tx {:arg-map arg-map
+                             :permission :pull})))
 
 (defn list-by-vault
   {:malli/schema [:-> :map
@@ -64,7 +65,8 @@
                    [:display-name [:string {:min 1}]]] :nil]}
   [context {:keys [display-name] :as arg-map}]
   (transaction/with-transaction [tx (core/transactable context)]
-    (let [resource (authorized-resource tx (assoc arg-map :lock? true) :manage)]
+    (let [resource (authorized-resource tx {:arg-map (assoc arg-map :lock? true)
+                                            :permission :manage})]
       (require-open resource)
       (when-not (= display-name (:display-name resource))
         (-update-attributes! tx arg-map)))
@@ -74,12 +76,14 @@
   {:malli/schema [:-> :map [:map [:actor :string] [:database-id ::model/database-id]] :nil]}
   [context arg-map]
   (transaction/with-transaction [tx (core/transactable context)]
-    (let [resource (authorized-resource tx (assoc arg-map :lock? true) :manage)]
+    (let [resource (authorized-resource tx {:arg-map (assoc arg-map :lock? true)
+                                            :permission :manage})]
       (when (= :active (:state resource)) (-close! tx arg-map)))
     nil))
 
-(defn- recovery-root-revision [tx context actor {:keys [revision-id] :as source}]
-  (let [resource (authorized-resource tx (assoc source :actor actor) :pull)
+(defn- recovery-root-revision [tx {context :context, actor :actor, {:keys [revision-id], :as source} :source}]
+  (let [resource (authorized-resource tx {:arg-map (assoc source :actor actor)
+                                          :permission :pull})
         source-database (assoc resource :vault (vault/resolve-by-id tx {:vault-id (:vault-id resource)
                                                                         :key-protection (core/key-protection context)}))]
     (revisions/with-consistent-view [view (core/consistent-readable context) source-database]
@@ -88,7 +92,7 @@
         {:revision-id (str "r-" (ulid)) :parent nil :database-page-count size
          :pages (revisions/fetch-pages-by-ids snapshot {:ids (set (range 1 (inc size)))})}))))
 
-(defn- creation-id [result vault-id]
+(defn- creation-id [result {:keys [vault-id]}]
   (when-not (= vault-id (:vault-id result))
     (throw (ex-info "Idempotency key belongs to another creation"
                     {::anomaly/category ::anomaly/conflict :reason ::creation-key-conflict})))
@@ -104,18 +108,20 @@
   [context {:keys [actor vault-id source] :as arg-map}]
   (transaction/with-transaction [tx (core/transactable context)]
     (if-let [result (-creation-result tx arg-map)]
-      (creation-id result vault-id)
+      (creation-id result {:vault-id vault-id})
       (do
         (grant/require-permission tx {:actor actor :vault-id vault-id :permission :manage})
         (vault/require-active (vault/-read tx {:vault-id vault-id :lock? true}))
         (let [target-vault (vault/resolve-by-id tx {:vault-id vault-id :key-protection (core/key-protection context)})
               {:keys [created?] :as result} (-create! tx arg-map)
-              id (creation-id result vault-id)]
+              id (creation-id result {:vault-id vault-id})]
           (when created?
             (revisions/initialize! (core/revision-writable context)
               {:database {:id id :vault target-vault}
-               :revision (if source (recovery-root-revision tx context actor source)
-                             (evaluator/initial-revision (core/evaluator context)))}))
+               :revision (if source (recovery-root-revision tx {:context context
+                                                                :actor actor
+                                                                :source source})
+                           (evaluator/initial-revision (core/evaluator context)))}))
           id)))))
 
 (defmethod spec-for ::database [_]

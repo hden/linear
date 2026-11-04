@@ -13,7 +13,7 @@
 (defn- resource [value]
   (update value :state name))
 
-(defn- require-input [schema value]
+(defn- require-input [schema {:keys [value]}]
   (when-not (spec/valid? schema value)
     (throw (ex-info "Invalid database request" {::anomaly/category ::anomaly/incorrect}))))
 
@@ -24,9 +24,8 @@
                       [:display-name [:string {:min 1}]]
                       [:source {:optional true} [:map {:closed true}
                                                  [:database-id ::model/database-id]
-                                                 [:revision-id {:optional true} ::revisions/revision-id]]]]
-                     body-params)
-      (require-input [:string {:min 1}] (get headers "idempotency-key"))
+                                                 [:revision-id {:optional true} ::revisions/revision-id]]]] {:value body-params})
+      (require-input [:string {:min 1}] {:value (get headers "idempotency-key")})
       (let [id (database/create! context (assoc body-params :actor (:sub identity)
                                            :vault-id (:id path-params)
                                            :idempotency-key (get headers "idempotency-key")))]
@@ -44,7 +43,7 @@
     (try
       (let [state (get {"active" :active "closed" :closed "all" :all}
                        (get query-params "state" "active"))]
-        (require-input [:enum :active :closed :all] state)
+        (require-input [:enum :active :closed :all] {:value state})
         (let [databases (database/list-by-vault context
                           {:actor (:sub identity) :vault-id (:id path-params) :state state})]
           {:status 200 :body {:databases (mapv resource databases)}}))
@@ -53,7 +52,7 @@
 (defn update-attributes [context]
   (fn [{:keys [body-params] :as request}]
     (try
-      (require-input [:map {:closed true} [:display-name [:string {:min 1}]]] body-params)
+      (require-input [:map {:closed true} [:display-name [:string {:min 1}]]] {:value body-params})
       (database/update-attributes! context (merge (arguments request) body-params))
       {:status 204}
       (catch Exception error (core/error-response (core/anomaly error))))))

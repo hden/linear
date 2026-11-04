@@ -8,7 +8,7 @@
    [linear.test-data.postgres :as postgres]
    [linear.usecase.core :as core]))
 
-(defn- request [actor vault-id]
+(defn- request [actor {:keys [vault-id]}]
   {:identity {:sub actor}
    :path-params {:id vault-id}})
 
@@ -20,8 +20,8 @@
           reader   "auth0|reader/email@example.com"
           vault-id (:vault-id (postgres/create-database! {:datasource database
                                                           :actor owner}))
-          owner-request (request owner vault-id)
-          reader-request (request reader vault-id)]
+          owner-request (request owner {:vault-id vault-id})
+          reader-request (request reader {:vault-id vault-id})]
       (is (= 400 (:status ((handler/set-grant context)
                            (assoc owner-request :body-params {:permission "admin"})))))
       (is (= 400 (:status ((handler/set-grant context)

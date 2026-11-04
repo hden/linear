@@ -99,7 +99,7 @@
           {}
           usages))
 
-(defn- cycle-path [graph from to]
+(defn- cycle-path [graph {:keys [from to]}]
   (letfn [(search [node path seen]
             (some (fn [next-node]
                     (cond
@@ -116,7 +116,7 @@
             canonical (first (sort-by #(mapv str %) rotations))]
         (conj (vec canonical) (first canonical))))))
 
-(defn- violation [usage rule message]
+(defn- violation [usage {:keys [rule message]}]
   (assoc usage :rule rule :message message))
 
 (defn violations
@@ -132,15 +132,16 @@
      (->> (concat
             (keep (fn [usage]
                     (when-let [[rule message] (dependency-rule usage)]
-                      (violation usage rule message)))
-                  dependency-usages)
+                      (violation usage {:rule rule
+                                        :message message})))
+              dependency-usages)
             (keep (fn [{:keys [from to] :as usage}]
-                    (when-let [path (cycle-path graph from to)]
-                      (violation usage
-                                 :cycle
-                                 (str "dependency cycle: "
-                                      (string/join " -> " path)))))
-                  dependency-usages))
+                    (when-let [path (cycle-path graph {:from from
+                                                       :to to})]
+                      (violation usage {:rule :cycle
+                                        :message (str "dependency cycle: "
+                                                   (string/join " -> " path))})))
+              dependency-usages))
           (sort-by (juxt :filename :row #(str (:from %)) #(str (:to %)) :message))
           vec))))
 

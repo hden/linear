@@ -173,6 +173,67 @@
               [(finding 'script :script-test "tests for scripts or hooks are forbidden")]))))
       (tree-seq #(and (not (api/quote-node? %)) (seq (:children %))) :children root))))
 
+(defn- callback-violations [{:keys [files locals local-usages var-usages]}]
+  (let [locals-by-file (group-by :filename locals)
+        usages-by-file (group-by :filename local-usages)
+        vars-by-file (group-by :filename var-usages)]
+    (mapcat
+      (fn [file]
+        (let [filename (str file)
+              root (api/parse-string (str "[\n" (slurp file) "\n]"))
+              nodes (tree-seq #(and (not (api/quote-node? %)) (seq (:children %))) :children root)
+              call-node? #(#{:list :fn} (api/tag %))
+              position (fn [node] [(dec (:row (meta node))) (:col (meta node))])
+              bindings (into []
+                             (mapcat
+                               (fn [node]
+                                 (when (api/map-node? node)
+                                   (mapcat
+                                     (fn [[binding value]]
+                                       (cond
+                                         (and (= :keys (api/sexpr binding)) (api/vector-node? value))
+                                         (filter #(= 'f (api/sexpr %)) (:children value))
+
+                                         (and (api/token-node? binding) (= :f (api/sexpr value)))
+                                         [binding]
+
+                                         :else []))
+                                     (partition 2 (:children node)))))
+                               nodes))
+              binding-positions (into #{} (map position) bindings)
+              callback-binding-ids (into #{}
+                                         (comp (filter #(binding-positions [(:row %) (:col %)]))
+                                               (map :id))
+                                         (get locals-by-file filename))
+              threading-forms (into {}
+                                    (for [usage (get vars-by-file filename)
+                                          :when (and (= 'clojure.core (:to usage))
+                                                     (#{'-> '->> 'some-> 'some->> 'cond-> 'cond->> 'doto} (:name usage)))]
+                                      [[(:name-row usage) (:name-col usage)] (:name usage)]))
+              threaded-calls (into #{}
+                                   (mapcat
+                                     (fn [node]
+                                       (when (call-node? node)
+                                         (let [[head _ & steps] (:children node)
+                                               macro-name (when head (threading-forms (position head)))
+                                               steps (if (#{'cond-> 'cond->>} macro-name)
+                                                       (take-nth 2 (rest steps)) steps)]
+                                           (when macro-name
+                                             (keep #(when (call-node? %) (position (first (:children %)))) steps)))))
+                                     nodes))
+              call-arities-by-position (into {} (for [node nodes
+                                                      :when (call-node? node)
+                                                      :let [[head & args] (:children node)]
+                                                      :when head]
+                                                  [(position head) (+ (count args) (if (threaded-calls (position head)) 1 0))]))]
+          (for [usage (get usages-by-file filename)
+                :when (callback-binding-ids (:id usage))
+                :let [arity (get call-arities-by-position [(:name-row usage) (:name-col usage)])]
+                :when (and arity (> arity 1))]
+            (assoc usage :rule :scope-callback :from 'source :to (:name usage)
+                   :message "callbacks destructured from :f must receive zero or one argument; bundle resources in a map"))))
+      (filter #(re-find #"(?:^|/)(?:src|test|scripts)/" (str %)) files))))
+
 (defn analyze-sources
   ([]
    (when (some #(.isFile ^java.io.File %) (file-seq (io/file "test/scripts")))
@@ -186,15 +247,18 @@
                       :cache false
                       :repro true
                       ;; Repository hooks and suppression settings must not erase policy evidence.
-                      :config ^:replace {:output {:analysis true}
+                      :config ^:replace {:output {:analysis {:locals true :local-usages true}}
                                          :skip-comments false
                                          :linters {:syntax {:level :error}}}})]
      (when (or (not (vector? (:var-usages analysis)))
                (not (seq (:namespace-definitions analysis)))
+               (not (vector? (:locals analysis)))
+               (not (vector? (:local-usages analysis)))
                (some #(= :syntax (:type %)) findings))
        (throw (ex-info "Policy analysis is incomplete or invalid" {:findings findings})))
      (assoc analysis :violations
             (->> (concat syntax-violations
+                         (callback-violations (assoc analysis :files files))
                          (for [{:keys [to] :as usage} (:namespace-usages analysis)
                                :when (other-async-namespace? to)]
                            (assoc usage :rule :non-promesa-async

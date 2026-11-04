@@ -114,4 +114,4 @@
 (deftest oversized-pull-body-has-an-incorrect-anomaly
   (is (= {::anomaly/category ::anomaly/incorrect
           :reason ::pull/request-too-large}
-         (test/catch-ex-data #(#'pull/body-bytes (byte-array (inc body-limit)))))))
+         (test/catch-ex-data {:f #(#'pull/body-bytes (byte-array (inc body-limit)))}))))

@@ -19,13 +19,13 @@
                        (-encrypt [_ _ _] (byte-array 0))
                        (-decrypt [_ _ _] nil))}})
 
-(defn- snapshot [revision-id page-count fetch-pages]
+(defn- snapshot [revision-id {:keys [page-count fetch-pages]}]
   (reify revisions/Snapshot
     (-revision-id [_] revision-id)
     (-size [_] page-count)
     (-fetch-pages-by-ids [_ options] (fetch-pages options))))
 
-(defn- view [head-snapshot snapshots changed-page-ids]
+(defn- view [head-snapshot {:keys [snapshots changed-page-ids]}]
   (reify revisions/ConsistentView
     (-head [_] head-snapshot)
     (-as-of [_ revision-id] (get snapshots revision-id))
@@ -44,7 +44,8 @@
             {:client-id "client" :generation 1 :change-id 1} :evaluate]
            [{:client-id "client" :generation 1 :change-id 1}
             {:client-id "client" :generation 0 :change-id 100} :conflict]]]
-    (let [head (snapshot "r-current" 1 (constantly {}))
+    (let [head (snapshot "r-current" {:page-count 1
+                                      :fetch-pages (constantly {})})
           evaluated (atom false)
           reader (reify evaluator/SyncProgressReadable
                    (-sync-progress [_ {:keys [snapshot client-id]}]
@@ -58,7 +59,8 @@
                         {:revision-id "r-next" :parent "r-current"
                          :database-page-count 1 :pages {}}))
           database (model/database attributes
-                     {::model/consistent-view (view head {} #{})
+                     {::model/consistent-view (view head {:snapshots {}
+                                                          :changed-page-ids #{}})
                       ::model/evaluator evaluator
                       ::model/sync-progress-reader reader})
           result (try
@@ -73,7 +75,8 @@
 (deftest evaluate-uses-head-and-checks-the-revision-parent
   (doseq [parent ["r-current" "r-other"]]
     (let [evaluated (atom nil)
-          head (snapshot "r-current" 1 (constantly {}))
+          head (snapshot "r-current" {:page-count 1
+                                      :fetch-pages (constantly {})})
           revision {:revision-id "r-next" :parent parent
                     :database-page-count 1 :pages {}}
           evaluator (reify evaluator/Evaluator
@@ -81,7 +84,8 @@
                         (reset! evaluated input)
                         revision))
           database (model/database attributes
-                                   {::model/consistent-view (view head {} #{})
+                                   {::model/consistent-view (view head {:snapshots {}
+                                                                        :changed-page-ids #{}})
                                     ::model/evaluator evaluator})
           result (try
                    (model/evaluate database {:statements []})
@@ -99,9 +103,10 @@
   (let [fetched (atom nil)
         compared (atom nil)
         page (byte-array [2])
-        target (snapshot "r-target" 3 (fn [options]
-                                        (reset! fetched options)
-                                        {2 page}))
+        target (snapshot "r-target" {:page-count 3
+                                     :fetch-pages (fn [options]
+                                                    (reset! fetched options)
+                                                    {2 page})})
         view (reify revisions/ConsistentView
                (-head [_] (throw (AssertionError. "explicit revision must use as-of")))
                (-as-of [_ revision-id]
@@ -122,9 +127,10 @@
                               [{:client-revision "r-head"} #{}]
                               [{:page-ids #{}} #{}]]]
     (let [fetched (atom nil)
-          head (snapshot "r-head" 3 (fn [{:keys [ids]}]
-                                      (reset! fetched ids)
-                                      {}))
+          head (snapshot "r-head" {:page-count 3
+                                   :fetch-pages (fn [{:keys [ids]}]
+                                                  (reset! fetched ids)
+                                                  {})})
           view (reify revisions/ConsistentView
                  (-head [_] head)
                  (-as-of [_ _] (throw (AssertionError. "must use head")))
@@ -148,7 +154,10 @@
     (is (= attributes (dissoc database ::model/revision-writable)))))
 
 (deftest operation-contracts-require-only-the-capabilities-they-use
-  (let [view (view (snapshot "r-head" 0 (constantly {})) {} #{})
+  (let [view (view (snapshot "r-head" {:page-count 0
+                                       :fetch-pages (constantly {})})
+               {:snapshots {}
+                :changed-page-ids #{}})
         evaluator (reify evaluator/Evaluator (-evaluate [_ _] nil))
         writer (reify revisions/RevisionWritable (-publish-next! [_ revision _] revision))]
     (doseq [[operation capabilities]
@@ -167,7 +176,8 @@
 
 (deftest expired-client-history-fetches-all-selected-pages-from-the-fixed-target
   (let [fetched (atom nil)
-        target (snapshot "r-target" 3 (fn [{:keys [ids]}] (reset! fetched ids) {}))
+        target (snapshot "r-target" {:page-count 3
+                                     :fetch-pages (fn [{:keys [ids]}] (reset! fetched ids) {})})
         view (reify revisions/ConsistentView
                (-head [_] (throw (AssertionError. "must keep the explicit target")))
                (-as-of [_ revision-id]
@@ -187,7 +197,8 @@
                    {::anomaly/category ::anomaly/fault :reason ::revisions/revision-cycle}
                    {::anomaly/category ::anomaly/not-found :reason ::revisions/revision-not-found}]]
     (let [error (ex-info "History failed" failure)
-          current (snapshot "r-head" 1 (fn [_] (throw (AssertionError. "must not fetch"))))
+          current (snapshot "r-head" {:page-count 1
+                                      :fetch-pages (fn [_] (throw (AssertionError. "must not fetch")))})
           view (reify revisions/ConsistentView
                  (-head [_] current)
                  (-as-of [_ _] (throw error))
@@ -204,12 +215,14 @@
            [1 {:client-revision "r-old" :page-ids #{2}} #{}]
            [1 {:client-revision "r-old" :server-revision "r-target"} #{1}]
            [0 {:client-revision "r-old"} #{}]]]
-    (let [target (snapshot "r-target" page-count
-                           (fn [{:keys [ids]}]
-                             (is (= expected-ids ids))
-                             (zipmap ids (repeat (byte-array [1])))))
-          head (snapshot "r-newer" 3 (fn [_] (throw (AssertionError. "must use the target snapshot"))))
-          view (view (if (:server-revision options) head target) {"r-target" target} #{1 2})
+    (let [target (snapshot "r-target" {:page-count page-count
+                                       :fetch-pages (fn [{:keys [ids]}]
+                                                      (is (= expected-ids ids))
+                                                      (zipmap ids (repeat (byte-array [1]))))})
+          head (snapshot "r-newer" {:page-count 3
+                                    :fetch-pages (fn [_] (throw (AssertionError. "must use the target snapshot")))})
+          view (view (if (:server-revision options) head target) {:snapshots {"r-target" target}
+                                                                  :changed-page-ids #{1 2}})
           result (model/pull (model/database attributes {::model/consistent-view view}) options)]
       (is (= "r-target" (:server-revision result)))
       (is (= page-count (:database-page-count result)))

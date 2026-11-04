@@ -25,7 +25,7 @@
 (defn- authenticated-data [value]
   (or value (byte-array 0)))
 
-(defn- encrypt-request [key-name plaintext aad]
+(defn- encrypt-request [key-name {:keys [plaintext aad]}]
   (-> (EncryptRequest/newBuilder)
       (.setName ^String key-name)
       (.setPlaintext (ByteString/copyFrom ^bytes plaintext))
@@ -34,7 +34,7 @@
       (.setAdditionalAuthenticatedDataCrc32C (checksum aad))
       .build))
 
-(defn- decrypt-request [key-name ciphertext aad]
+(defn- decrypt-request [key-name {:keys [ciphertext aad]}]
   (-> (DecryptRequest/newBuilder)
       (.setName ^String key-name)
       (.setCiphertext (ByteString/copyFrom ^bytes ciphertext))
@@ -43,7 +43,7 @@
       (.setAdditionalAuthenticatedDataCrc32C (checksum aad))
       .build))
 
-(defn- verified-ciphertext [key-name ^EncryptResponse response]
+(defn- verified-ciphertext [key-name {:keys [^EncryptResponse response]}]
   (let [ciphertext (.toByteArray (.getCiphertext response))]
     (when-not (and (.getVerifiedPlaintextCrc32C response)
                    (.getVerifiedAdditionalAuthenticatedDataCrc32C response)
@@ -60,16 +60,18 @@
       (throw (key-service-failed nil)))
     plaintext))
 
-(defn- wrap-keychain [^KeyManagementServiceClient client key-name value associated-data]
-  (let [request (encrypt-request key-name (crypto/freeze value) (authenticated-data associated-data))
+(defn- wrap-keychain [^KeyManagementServiceClient client {:keys [key-name value associated-data]}]
+  (let [request (encrypt-request key-name {:plaintext (crypto/freeze value)
+                                           :aad (authenticated-data associated-data)})
         response (try
                    (.encrypt client ^EncryptRequest request)
                    (catch ApiException cause
                      (throw (key-service-failed cause))))]
-    (verified-ciphertext key-name response)))
+    (verified-ciphertext key-name {:response response})))
 
-(defn- unwrap-keychain [^KeyManagementServiceClient client key-name ciphertext associated-data]
-  (let [request (decrypt-request key-name ciphertext (authenticated-data associated-data))
+(defn- unwrap-keychain [^KeyManagementServiceClient client {:keys [key-name ciphertext associated-data]}]
+  (let [request (decrypt-request key-name {:ciphertext ciphertext
+                                           :aad (authenticated-data associated-data)})
         response (try
                    (.decrypt client ^DecryptRequest request)
                    (catch InvalidArgumentException _ nil)
@@ -84,9 +86,13 @@
   keychain/KeyProtection
   (-id [_] key-id)
   (-wrap [_ data-key {:keys [associated-data]}]
-    (wrap-keychain client key-id data-key associated-data))
+    (wrap-keychain client {:key-name key-id
+                           :value data-key
+                           :associated-data associated-data}))
   (-unwrap [_ ciphertext {:keys [associated-data]}]
-    (unwrap-keychain client key-id ciphertext associated-data))
+    (unwrap-keychain client {:key-name key-id
+                             :ciphertext ciphertext
+                             :associated-data associated-data}))
   Closeable
   (close [_] (.close ^KeyManagementServiceClient client)))
 

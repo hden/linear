@@ -9,14 +9,14 @@
    [linear.adapter.slatedb.snapshot :as snapshot]
    [linear.usecase.database.revisions :as revisions]))
 
-(defn- current-state-records [keychain revision head]
+(defn- current-state-records [keychain {:keys [revision head]}]
   (conj (mapv (fn [[page-id page]]
                 (let [page-key (key/page page-id)]
                   [page-key (codec/encode-page keychain {:record-key page-key :page page})]))
               (:pages revision))
         [(key/head) (codec/encode-head head)]))
 
-(defn- undo-pages [read-values keychain head page-ids]
+(defn- undo-pages [read-values {:keys [keychain head page-ids]}]
   (let [record-keys (mapv key/page page-ids)
         values (read-values record-keys)]
     (into {}
@@ -31,7 +31,7 @@
                    [page-id page]))
                page-ids record-keys values))))
 
-(defn- add-suppressed! [error suppressed]
+(defn- add-suppressed! [error {:keys [suppressed]}]
   (when suppressed
     (.addSuppressed ^Exception error ^Exception suppressed))
   error)
@@ -42,22 +42,20 @@
          (= :slatedb (:linear.error/source data))
          (= :commit-transaction (:linear.error/operation data)))))
 
-(defn- revision-conflict [message data cause]
+(defn- revision-conflict [message {:keys [data cause]}]
   (ex-info message
            (merge {::anomaly/category ::anomaly/conflict
                    :reason ::revisions/revision-conflict}
                   data)
            cause))
 
-(defn- ensure-current-parent! [head revision]
+(defn- ensure-current-parent! [head {:keys [revision]}]
   (when-not (= head (:parent revision))
-    (throw (revision-conflict
-             "Database HEAD changed before publish"
-             {:expected-parent (:parent revision)
-              :actual-parent head}
-             nil))))
+    (throw (revision-conflict "Database HEAD changed before publish" {:data {:expected-parent (:parent revision)
+                                                                             :actual-parent head}
+                                                                      :cause nil}))))
 
-(defn- publish! [store revision database initialize?]
+(defn- publish! [store {:keys [revision database initialize?]}]
   (let [database-id (:id database)
         keychain    (get-in database [:vault :keychain])]
     (connection/with-database [database-handle store {:database-id database-id}]
@@ -68,7 +66,8 @@
                 head        (if initialize?
                               (let [[value] (read-values [(key/head)])]
                                 (when value
-                                  (throw (revision-conflict "Database HEAD already exists" {} nil)))
+                                  (throw (revision-conflict "Database HEAD already exists" {:data {}
+                                                                                            :cause nil})))
                                 nil)
                               (snapshot/head-metadata read-values))
                 expires-at (max (+ (System/currentTimeMillis)
@@ -76,32 +75,38 @@
                                 (or (:history-expires-at head) 0))
                 next-head (assoc (select-keys revision [:revision-id :database-page-count])
                                  :history-expires-at expires-at)]
-            (ensure-current-parent! (:revision-id head) revision)
+            (ensure-current-parent! (:revision-id head) {:revision revision})
             (let [record-key (key/revision (:revision-id revision))
                   undo {:parent head
-                        :undo-pages (undo-pages read-values keychain head (vec (keys (:pages revision))))}]
+                        :undo-pages (undo-pages read-values {:keychain keychain
+                                                             :head head
+                                                             :page-ids (vec (keys (:pages revision)))})}]
               (ffi/await
                 (ffi/write-expiring-values transaction
                                            {:entries [[record-key (codec/encode-revision keychain {:record-key record-key :revision undo})]]
                                             :expires-at expires-at})))
             (ffi/await
               (ffi/write-values transaction
-                                (current-state-records keychain revision next-head)))
+                                (current-state-records keychain {:revision revision
+                                                                 :head next-head})))
             (ffi/await (ffi/commit-transaction transaction))
             revision)
           (catch Exception error
             (try
               (ffi/await (ffi/rollback-transaction transaction))
               (catch Exception rollback-error
-                (add-suppressed! error rollback-error)))
+                (add-suppressed! error {:suppressed rollback-error})))
             (if (commit-conflict? error)
-              (throw (revision-conflict "SlateDB publish conflict" {} error))
+              (throw (revision-conflict "SlateDB publish conflict" {:data {}
+                                                                    :cause error}))
               (throw error))))))))
 
 (extend-type linear.adapter.slatedb.connection.Connection
   revisions/Initializable
   (-initialize! [store {:keys [revision database]}]
-    (publish! store revision database true))
+    (publish! store {:revision revision
+                     :database database
+                     :initialize? true}))
 
   revisions/ConsistentReadable
   (-read-consistently [store f database]
@@ -113,7 +118,9 @@
 
   revisions/RevisionWritable
   (-publish-next! [store revision database]
-    (publish! store revision database false))
+    (publish! store {:revision revision
+                     :database database
+                     :initialize? false}))
 
   revisions/RevisionAwaitable
   (-await-revision [store {:keys [database-id revision-id timeout-ms]}]

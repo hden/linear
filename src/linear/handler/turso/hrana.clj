@@ -3,7 +3,7 @@
    [cognitect.anomalies :as anomaly]
    [linear.handler.core :as core]))
 
-(defn- pipeline-response [status result]
+(defn- pipeline-response [status {:keys [result]}]
   {:status status
    :headers {"content-type" "application/json"}
    :body {:baton nil
@@ -20,38 +20,34 @@
    :rows_written 0
    :query_duration_ms 0.0})
 
-(defn- batch-result [step-results step-errors]
+(defn- batch-result [step-results {:keys [step-errors]}]
   {:type "batch"
    :result {:step_results step-results
             :step_errors step-errors
             :replication_index nil}})
 
 (defn batch-response [step-count]
-  (pipeline-response 200
-                     {:type "ok"
-                      :response (batch-result (vec (repeat step-count
-                                                           (ok-step-result)))
-                                              (vec (repeat step-count nil)))}))
+  (pipeline-response 200 {:result {:type "ok"
+                                   :response (batch-result (vec (repeat step-count
+                                                                        (ok-step-result))) {:step-errors (vec (repeat step-count nil))})}}))
 
 (defn last-change-id-response [{:keys [generation change-id] :as progress}]
-  (pipeline-response 200
-    {:type "ok"
-     :response
-     (batch-result [{:cols [{:name "pull_gen"
-                             :decltype "INTEGER"}
-                            {:name "change_id"
-                             :decltype "INTEGER"}]
-                     :rows (if progress
-                             [[{:type "integer" :value (str generation)}
-                               {:type "integer" :value (str change-id)}]]
-                             [])
-                     :affected_row_count 0
-                     :last_insert_rowid nil
-                     :replication_index nil
-                     :rows_read 0
-                     :rows_written 0
-                     :query_duration_ms 0.0}]
-                   [nil])}))
+  (pipeline-response 200 {:result {:type "ok"
+                                   :response
+                                   (batch-result [{:cols [{:name "pull_gen"
+                                                           :decltype "INTEGER"}
+                                                          {:name "change_id"
+                                                           :decltype "INTEGER"}]
+                                                   :rows (if progress
+                                                           [[{:type "integer" :value (str generation)}
+                                                             {:type "integer" :value (str change-id)}]]
+                                                           [])
+                                                   :affected_row_count 0
+                                                   :last_insert_rowid nil
+                                                   :replication_index nil
+                                                   :rows_read 0
+                                                   :rows_written 0
+                                                   :query_duration_ms 0.0}] {:step-errors [nil]})}}))
 
 (defn batch-error-response
   [{:as batch} {:keys [anomaly wire-indexes]}]
@@ -70,17 +66,14 @@
                            error-index
                            {:message (::anomaly/message anomaly)
                             :code "BATCH_STEP_ERROR"})]
-    (pipeline-response 200
-                       {:type "ok"
-                        :response (batch-result step-results
-                                                step-errors)})))
+    (pipeline-response 200 {:result {:type "ok"
+                                     :response (batch-result step-results {:step-errors step-errors})}})))
 
 (defn error-response [{::anomaly/keys [category message] :as arg-map}]
-  (pipeline-response (if (= ::anomaly/not-found category) 500 (core/http-status arg-map))
-                     {:type "error"
-                      :error {:message message
-                              :code (case category
-                                      ::anomaly/incorrect "INVALID_REQUEST"
-                                      ::anomaly/forbidden "FORBIDDEN"
-                                      ::anomaly/conflict "CONFLICT"
-                                      "INTERNAL_ERROR")}}))
+  (pipeline-response (if (= ::anomaly/not-found category) 500 (core/http-status arg-map)) {:result {:type "error"
+                                                                                                    :error {:message message
+                                                                                                            :code (case category
+                                                                                                                    ::anomaly/incorrect "INVALID_REQUEST"
+                                                                                                                    ::anomaly/forbidden "FORBIDDEN"
+                                                                                                                    ::anomaly/conflict "CONFLICT"
+                                                                                                                    "INTERNAL_ERROR")}}}))

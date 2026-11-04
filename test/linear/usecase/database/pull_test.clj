@@ -175,9 +175,8 @@
                      nil))]
       (slatedb-data/store-root! {:store store :database-id database-id :keychain keychain :pages {}})
       (is (= ::database/database-not-found
-             (:reason (linear.test/catch-ex-data
-                        #(database/pull (assoc context ::core/revision-store reader)
-                                        (assoc args :client-revision "r-root" :long-poll-timeout-ms 100)))))))))
+             (:reason (linear.test/catch-ex-data {:f #(database/pull (assoc context ::core/revision-store reader)
+                                                        (assoc args :client-revision "r-root" :long-poll-timeout-ms 100))})))))))
 
 (deftest ^:integration eviction-wakes-long-poll-and-subsequent-pull-still-works
   (with-system [system (run {:keys [:duct.database/sql :duct.migrator/ragtime]})]

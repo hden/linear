@@ -22,10 +22,10 @@
            :created #inst "2026-01-01"
            :keychain keychain}})
 
-(defn- seed! [store keychain revision]
+(defn- seed! [store {:keys [keychain revision]}]
   (revisions/initialize! store {:database (database-record keychain) :revision revision}))
 
-(defn- read-records [store record-keys]
+(defn- read-records [store {:keys [record-keys]}]
   (connection/with-database [database store {:database-id "d-1"}]
     (ffi/with-transaction [transaction database]
       (try
@@ -40,7 +40,7 @@
         root {:revision-id "r-created" :parent nil :database-page-count 1 :pages {1 (byte-array [1 2 3])}}]
     (try
       (is (= root (revisions/initialize! store {:database database :revision root})))
-      (let [[head-value page-value] (read-records store [(key/head) (key/page 1)])]
+      (let [[head-value page-value] (read-records store {:record-keys [(key/head) (key/page 1)]})]
         (is (= {:revision-id "r-created" :database-page-count 1} (select-keys (codec/decode-head head-value) [:revision-id :database-page-count])))
         (is (not (Arrays/equals ^bytes (get-in root [:pages 1]) ^bytes page-value)))
         (is (Arrays/equals ^bytes (get-in root [:pages 1])
@@ -50,7 +50,7 @@
                     nil
                     (catch clojure.lang.ExceptionInfo error error))]
         (is (= ::revisions/revision-conflict (:reason (ex-data error)))))
-      (let [[head-value overwritten] (read-records store [(key/head) (key/revision "r-overwrite")])]
+      (let [[head-value overwritten] (read-records store {:record-keys [(key/head) (key/revision "r-overwrite")]})]
         (is (= {:revision-id "r-created" :database-page-count 1} (select-keys (codec/decode-head head-value) [:revision-id :database-page-count])))
         (is (nil? overwritten)))
       (finally (connection/close store)))))
@@ -70,7 +70,7 @@
                     nil
                     (catch clojure.lang.ExceptionInfo error error))]
         (is (= ::revisions/revision-conflict (:reason (ex-data error)))))
-      (let [[head-value root-value] (read-records store [(key/head) (key/revision "r-created")])]
+      (let [[head-value root-value] (read-records store {:record-keys [(key/head) (key/revision "r-created")]})]
         (is (= {} (select-keys (codec/decode-head head-value) [:revision-id :database-page-count])))
         (is (nil? root-value)))
       (finally (connection/close store)))))
@@ -109,13 +109,14 @@
                    :pages               {1 (byte-array [2])}}
         database  (database-record keychain)]
     (try
-      (seed! store keychain root)
+      (seed! store {:keychain keychain
+                    :revision root})
       (is (= revision
              (revisions/publish-next! store {:revision revision :database database})))
       (let [[head-value revision-value page-value]
-            (read-records store [(key/head)
-                                 (key/revision "r-next")
-                                 (key/page 1)])]
+            (read-records store {:record-keys [(key/head)
+                                               (key/revision "r-next")
+                                               (key/page 1)]})]
         (is (= {:revision-id "r-next" :database-page-count 1} (select-keys (codec/decode-head head-value) [:revision-id :database-page-count])))
         (let [undo (codec/decode-revision keychain {:record-key (key/revision "r-next") :value revision-value})]
           (is (= "r-root" (get-in undo [:parent :revision-id])))
@@ -140,7 +141,8 @@
                    :pages               {1 (byte-array [9])}}
         database  (database-record keychain)]
     (try
-      (seed! store keychain root)
+      (seed! store {:keychain keychain
+                    :revision root})
       (let [error (try
                     (revisions/publish-next! store {:revision stale :database database})
                     (catch clojure.lang.ExceptionInfo failure
@@ -148,9 +150,9 @@
         (is (= ::anomaly/conflict (-> error ex-data ::anomaly/category)))
         (is (= ::revisions/revision-conflict (-> error ex-data :reason))))
       (let [[head-value revision-value page-value]
-            (read-records store [(key/head)
-                                 (key/revision "r-stale")
-                                 (key/page 1)])]
+            (read-records store {:record-keys [(key/head)
+                                               (key/revision "r-stale")
+                                               (key/page 1)]})]
         (is (= {:revision-id "r-root" :database-page-count 1} (select-keys (codec/decode-head head-value) [:revision-id :database-page-count])))
         (is (nil? revision-value))
         (is (Arrays/equals (byte-array [1])
@@ -168,7 +170,8 @@
                   :pages {1 (byte-array [7])}}
         database (database-record keychain)]
     (try
-      (seed! store keychain root)
+      (seed! store {:keychain keychain
+                    :revision root})
       (revisions/with-consistent-view [view store database]
         (let [snapshot (revisions/head view)]
           (is (= "r-root" (revisions/revision-id snapshot)))
@@ -197,7 +200,8 @@
                    :pages               {1 (byte-array [3])}}
         database  (database-record keychain)]
     (try
-      (seed! store keychain root)
+      (seed! store {:keychain keychain
+                    :revision root})
       (is (= first
              (revisions/publish-next! store {:revision first :database database})))
       (is (= second
@@ -227,7 +231,7 @@
             (is (ffi/usable-database? database))))
         (finally (connection/close store))))))
 
-(defn- expire-history! [store revision-ids]
+(defn- expire-history! [store {:keys [revision-ids]}]
   (connection/with-database [database store {:database-id "d-1"}]
     (ffi/with-transaction [transaction database]
       (let [[value] (ffi/await (ffi/read-transaction-values transaction [(key/head)]))
@@ -237,7 +241,7 @@
         (ffi/await (ffi/write-values transaction [[(key/head) (codec/encode-head head)]]))
         (ffi/await (ffi/commit-transaction transaction))))))
 
-(defn- record-expiries [store record-keys]
+(defn- record-expiries [store {:keys [record-keys]}]
   (connection/with-database [database store {:database-id "d-1"}]
     (mapv (fn [record-key]
             (.expireTs ^io.slatedb.uniffi.KeyValue
@@ -254,13 +258,14 @@
               :pages {1 (byte-array [3])}}
         before (System/currentTimeMillis)]
     (try
-      (seed! store keychain root)
+      (seed! store {:keychain keychain
+                    :revision root})
       (let [[head-expiry page-expiry revision-expiry]
-            (record-expiries store [(key/head) (key/page 1) (key/revision "r-root")])]
+            (record-expiries store {:record-keys [(key/head) (key/page 1) (key/revision "r-root")]})]
         (is (nil? head-expiry))
         (is (nil? page-expiry))
         (is (<= (+ before (* 30 86400000)) revision-expiry)))
-      (expire-history! store ["r-root"])
+      (expire-history! store {:revision-ids ["r-root"]})
       (revisions/with-consistent-view [view store database]
         (let [snapshot (revisions/head view)]
           (is (= 2 (revisions/size snapshot)))
@@ -272,7 +277,7 @@
           (is (= 2 (revisions/size snapshot)))
           (is (= {1 '(1) 2 '(2)}
                  (update-vals (revisions/fetch-pages-by-ids snapshot {:ids #{1 2}}) seq)))))
-      (expire-history! store ["r-next"])
+      (expire-history! store {:revision-ids ["r-next"]})
       (revisions/with-consistent-view [view store database]
         (is (= {1 '(3) 2 '(2)}
                (update-vals (revisions/fetch-pages-by-ids (revisions/head view) {:ids #{1 2}}) seq))))
@@ -284,10 +289,11 @@
         database (database-record keychain)
         root {:revision-id "r-root" :parent nil :database-page-count 1 :pages {1 (byte-array [1])}}]
     (try
-      (seed! store keychain root)
+      (seed! store {:keychain keychain
+                    :revision root})
       (revisions/publish-next! (assoc store :revision-retention-days 1)
         {:database database :revision {:revision-id "r-next" :parent "r-root" :database-page-count 1 :pages {1 (byte-array [2])}}})
-      (let [[root-expiry next-expiry] (record-expiries store [(key/revision "r-root") (key/revision "r-next")])]
+      (let [[root-expiry next-expiry] (record-expiries store {:record-keys [(key/revision "r-root") (key/revision "r-next")]})]
         (is (= root-expiry next-expiry))
         (is (<= (+ (System/currentTimeMillis) (* 89 86400000)) next-expiry)))
       (finally (connection/close store)))))
@@ -299,7 +305,8 @@
         root {:revision-id "r-root" :parent nil :database-page-count 2
               :pages {1 (byte-array [1]) 2 (byte-array [2])}}]
     (try
-      (seed! store keychain root)
+      (seed! store {:keychain keychain
+                    :revision root})
       (doseq [revision [{:revision-id "r-shrink" :parent "r-root" :database-page-count 1 :pages {1 (byte-array [3])}}
                         {:revision-id "r-grow" :parent "r-shrink" :database-page-count 3 :pages {2 (byte-array [4]) 3 (byte-array [5])}}
                         {:revision-id "r-repeat" :parent "r-grow" :database-page-count 3 :pages {1 (byte-array [6])}}]]
@@ -328,10 +335,11 @@
         next {:revision-id "r-next" :parent "r-root" :database-page-count 2
               :pages (sorted-map 1 (byte-array [2]) 2 (byte-array [3]))}]
     (try
-      (seed! store keychain root)
+      (seed! store {:keychain keychain
+                    :revision root})
       (is (thrown? clojure.lang.ExceptionInfo
                    (revisions/publish-next! store {:database (assoc-in database [:vault :keychain] failing-keychain) :revision next})))
-      (let [[head-value undo-value new-page] (read-records store [(key/head) (key/revision "r-next") (key/page 2)])]
+      (let [[head-value undo-value new-page] (read-records store {:record-keys [(key/head) (key/revision "r-next") (key/page 2)]})]
         (is (= "r-root" (:revision-id (codec/decode-head head-value))))
         (is (nil? undo-value))
         (is (nil? new-page)))
@@ -345,9 +353,10 @@
         keychain (crypto-core/new-keychain)
         database (database-record keychain)]
     (try
-      (seed! store keychain {:revision-id "r-root" :parent nil :database-page-count 1 :pages {1 (byte-array [1])}})
+      (seed! store {:keychain keychain
+                    :revision {:revision-id "r-root" :parent nil :database-page-count 1 :pages {1 (byte-array [1])}}})
       (revisions/publish-next! store {:database database :revision {:revision-id "r-first" :parent "r-root" :database-page-count 1 :pages {1 (byte-array [2])}}})
-      (expire-history! store ["r-root" "r-first"])
+      (expire-history! store {:revision-ids ["r-root" "r-first"]})
       (revisions/publish-next! store {:database database :revision {:revision-id "r-second" :parent "r-first" :database-page-count 2 :pages {2 (byte-array [3])}}})
       (revisions/with-consistent-view [view store database]
         (let [database (model/database database {::model/consistent-view view})
@@ -364,7 +373,8 @@
         database (database-record keychain)
         start (p/deferred)]
     (try
-      (seed! store keychain {:revision-id "r-root" :parent nil :database-page-count 1 :pages {1 (byte-array [0])}})
+      (seed! store {:keychain keychain
+                    :revision {:revision-id "r-root" :parent nil :database-page-count 1 :pages {1 (byte-array [0])}}})
       (let [writers (mapv (fn [id]
                             (p/thread
                               (p/join start)

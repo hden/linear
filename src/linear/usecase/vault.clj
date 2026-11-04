@@ -28,7 +28,7 @@
                      :reason ::vault-deleted
                      :vault-id id}))))
 
-(defn- require-key-protection [protection encrypted-by]
+(defn- require-key-protection [protection {:keys [encrypted-by]}]
   (when-not (and protection (= encrypted-by (keychain/id protection)))
     (throw (ex-info "Master key is not configured"
                     {::anomaly/category ::anomaly/fault
@@ -39,7 +39,7 @@
   (u/mapcat
     (fn [{:keys [ciphertext encrypted-by] :as vault}]
       (require-active vault)
-      (require-key-protection key-protection encrypted-by)
+      (require-key-protection key-protection {:encrypted-by encrypted-by})
       (if-let [data-key (keychain/unwrap key-protection
                           {:associated-data (.getBytes ^String id "UTF-8")
                            :ciphertext ciphertext})]
@@ -53,7 +53,7 @@
                          :vault-id id}))))
     (lab/fetch ::vault id)))
 
-(defn- run-retriever [retriever env]
+(defn- run-retriever [retriever {:keys [env]}]
   (try
     (u/run!! retriever {:env env})
     (catch Exception error
@@ -64,14 +64,13 @@
 
 (defn resolve-by-id
   [tx {:keys [vault-id key-protection]}]
-  (run-retriever (retriever vault-id {:key-protection key-protection}) {:tx tx}))
+  (run-retriever (retriever vault-id {:key-protection key-protection}) {:env {:tx tx}}))
 
-(defn- fetch [key-protection tx ids]
+(defn- fetch [key-protection {:keys [tx ids]}]
   (run-retriever (lab/traverse (into {}
                                  (map (fn [id]
                                         [id (retriever id {:key-protection key-protection})]))
-                                 ids))
-    {:tx tx}))
+                                 ids)) {:env {:tx tx}}))
 
 (defn create!
   {:malli/schema [:->
@@ -118,13 +117,14 @@
       (grant/require-permission tx {:actor actor
                                     :vault-id id
                                     :permission :pull}))
-    (fetch (core/key-protection context) tx ids)))
+    (fetch (core/key-protection context) {:tx tx
+                                          :ids ids})))
 
 (defn- state [vault]
   (assoc (dissoc vault :ciphertext :encrypted-by)
          :state (if (:ciphertext vault) :active :deleted)))
 
-(defn- authorized-vault [tx {:keys [actor vault-id] :as arg-map} permission lock?]
+(defn- authorized-vault [tx {:keys [permission lock?] {:keys [actor vault-id] :as arg-map} :arg-map}]
   (grant/require-permission tx {:actor actor :vault-id vault-id :permission permission})
   (or (-read tx (assoc arg-map :lock? lock?))
       (throw (ex-info "Vault not found"
@@ -135,13 +135,17 @@
   {:malli/schema [:-> :map [:map [:actor :string] [:vault-id :string]] :map]}
   [context arg-map]
   (transaction/with-transaction [tx (core/transactable context) {:read-only true}]
-    (state (authorized-vault tx arg-map :pull false))))
+    (state (authorized-vault tx {:arg-map arg-map
+                                 :permission :pull
+                                 :lock? false}))))
 
 (defn recovery-token
   {:malli/schema [:-> :map [:map [:actor :string] [:vault-id :string]] :string]}
   [context arg-map]
   (transaction/with-transaction [tx (core/transactable context) {:read-only true}]
-    (let [{:keys [id ciphertext encrypted-by]} (authorized-vault tx arg-map :manage false)]
+    (let [{:keys [id ciphertext encrypted-by]} (authorized-vault tx {:arg-map arg-map
+                                                                     :permission :manage
+                                                                     :lock? false})]
       (require-active {:id id :ciphertext ciphertext})
       (.encodeToString (.withoutPadding (Base64/getUrlEncoder))
                        (cbor/encode [1 id encrypted-by ciphertext])))))
@@ -150,7 +154,9 @@
   {:malli/schema [:-> :map [:map [:actor :string] [:vault-id :string]] :nil]}
   [context {:keys [vault-id] :as arg-map}]
   (transaction/with-transaction [tx (core/transactable context)]
-    (authorized-vault tx arg-map :manage true)
+    (authorized-vault tx {:arg-map arg-map
+                          :permission :manage
+                          :lock? true})
     (-store-key! tx {:vault-id vault-id :ciphertext nil :encrypted-by nil})
     nil))
 
@@ -158,7 +164,7 @@
   (ex-info "Invalid recovery token"
            {::anomaly/category ::anomaly/incorrect :reason ::invalid-recovery-token}))
 
-(defn- decode-token [token vault-id]
+(defn- decode-token [token {:keys [vault-id]}]
   (let [decoded (try
                   (cbor/decode (.decode (Base64/getUrlDecoder) ^String token))
                   (catch Exception _ (throw (invalid-token))))]
@@ -174,10 +180,12 @@
   {:malli/schema [:-> :map [:map [:actor :string] [:vault-id :string] [:token :string]] :nil]}
   [context {:keys [vault-id token] :as arg-map}]
   (transaction/with-transaction [tx (core/transactable context)]
-    (let [stored (authorized-vault tx arg-map :manage true)
-          {:keys [encrypted-by ciphertext]} (decode-token token vault-id)
+    (let [stored (authorized-vault tx {:arg-map arg-map
+                                       :permission :manage
+                                       :lock? true})
+          {:keys [encrypted-by ciphertext]} (decode-token token {:vault-id vault-id})
           key-protection (core/key-protection context)]
-      (require-key-protection key-protection encrypted-by)
+      (require-key-protection key-protection {:encrypted-by encrypted-by})
       (when-not (keychain/unwrap key-protection
                   {:associated-data (.getBytes ^String vault-id "UTF-8")
                    :ciphertext ciphertext})

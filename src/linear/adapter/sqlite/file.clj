@@ -4,7 +4,7 @@
    [linear.adapter.sqlite.protocol :as sqlite]
    [linear.usecase.database.revisions :as revisions]))
 
-(defn- fetch-pages [snapshot page-numbers]
+(defn- fetch-pages [snapshot {:keys [page-numbers]}]
   (let [page-numbers (set page-numbers)
         pages        (revisions/fetch-pages-by-ids snapshot {:ids page-numbers})]
     (into {}
@@ -13,7 +13,8 @@
           page-numbers)))
 
 (defn- page-size [snapshot]
-  (let [header (get (fetch-pages snapshot #{1}) 1)]
+  (let [header (get (fetch-pages snapshot {:page-numbers #{1}})
+                 1)]
     (when-not (and header (>= (alength ^bytes header) 18))
       (fault "SQLite snapshot has no readable page-one header"
              {:reason ::missing-header}))
@@ -27,19 +28,19 @@
                 :page-size page-size}))
       page-size)))
 
-(defn- page-numbers-for-range [offset end page-size]
+(defn- page-numbers-for-range [offset {:keys [end page-size]}]
   (if (<= end offset)
     #{}
     (let [first-page (inc (quot offset page-size))
           last-page  (inc (quot (dec end) page-size))]
       (into #{} (range first-page (inc last-page))))))
 
-(defn- read-snapshot [snapshot page-size file-size offset length]
+(defn- read-snapshot [snapshot {:keys [page-size file-size offset length]}]
   (let [requested-end (+ offset length)
         available-end (min requested-end file-size)
         output        (byte-array length)
-        pages         (fetch-pages snapshot
-                                   (page-numbers-for-range offset available-end page-size))]
+        pages         (fetch-pages snapshot {:page-numbers (page-numbers-for-range offset {:end available-end
+                                                                                           :page-size page-size})})]
     (doseq [[page-number page] pages]
       (when-not page
         (fault "SQLite snapshot is missing a page"
@@ -61,7 +62,10 @@
   (-close [_]
     nil)
   (-read [_ offset length]
-    (read-snapshot snapshot page-size file-size offset length))
+    (read-snapshot snapshot {:page-size page-size
+                             :file-size file-size
+                             :offset offset
+                             :length length}))
   (-write [_ _offset _bytes]
     (fault "SQLite attempted to mutate an immutable Snapshot"
            {:reason ::immutable-file :operation :write}))

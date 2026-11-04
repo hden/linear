@@ -56,7 +56,7 @@
                            :vars vars
                            :profiles profiles)))))
 
-(defn catch-ex-data [f]
+(defn catch-ex-data [{f :f}]
   (try
     (f)
     (catch clojure.lang.ExceptionInfo ex

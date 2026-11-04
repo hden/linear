@@ -17,10 +17,10 @@
   [value]
   (some-> value cbor/decode))
 
-(defn- encrypt [keychain record-key value]
+(defn- encrypt [keychain {:keys [record-key value]}]
   (keychain/encrypt keychain {:associated-data record-key :value value}))
 
-(defn- decrypt-and-decode [keychain record-key value]
+(defn- decrypt-and-decode [keychain {:keys [record-key value]}]
   (when value
     (try
       (let [decoded (-> (keychain/decrypt keychain {:associated-data record-key :ciphertext value})
@@ -41,7 +41,8 @@
                    [:revision :map]]
                   bytes-schema]}
   [keychain {:keys [record-key revision]}]
-  (encrypt keychain record-key (cbor/encode revision)))
+  (encrypt keychain {:record-key record-key
+                     :value (cbor/encode revision)}))
 
 (defn decode-revision
   {:malli/schema [:->
@@ -50,7 +51,8 @@
                    [:value [:maybe bytes-schema]]]
                   [:maybe :map]]}
   [keychain {:keys [record-key value]}]
-  (decrypt-and-decode keychain record-key value))
+  (decrypt-and-decode keychain {:record-key record-key
+                                :value value}))
 
 (defn encode-page
   {:malli/schema [:->
@@ -59,7 +61,8 @@
                    [:page bytes-schema]]
                   bytes-schema]}
   [keychain {:keys [record-key page]}]
-  (encrypt keychain record-key (cbor/encode {:data page})))
+  (encrypt keychain {:record-key record-key
+                     :value (cbor/encode {:data page})}))
 
 (defn decode-page
   {:malli/schema [:->
@@ -68,4 +71,6 @@
                    [:value [:maybe bytes-schema]]]
                   [:maybe bytes-schema]]}
   [keychain {:keys [record-key value]}]
-  (some-> (decrypt-and-decode keychain record-key value) :data))
+  (some-> (decrypt-and-decode keychain {:record-key record-key
+                                        :value value})
+    :data))
