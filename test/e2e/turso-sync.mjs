@@ -109,6 +109,75 @@ try {
   await readerClient.exec("UPDATE t SET value = 'reader-local' WHERE id = 1");
   await assert.rejects(() => readerClient.push(), /403/);
 
+  const shortPollClient = await connectClient("long-poll-short", { longPollTimeoutMs: 100 });
+  const shortPollStart = performance.now();
+  assert.equal(await shortPollClient.pull(), false);
+  const shortPollElapsed = performance.now() - shortPollStart;
+  assert(shortPollElapsed >= 90 && shortPollElapsed < 4000,
+    `requested short wait was not respected: ${shortPollElapsed} ms`);
+
+  // The official SDK must accept a normal empty pull before its requested
+  // timeout, then keep pulling from the same revision.
+  const cappedClient = await connectClient("long-poll-capped", {
+    longPollTimeoutMs: 0xffffffff
+  });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const start = performance.now();
+    assert.equal(await cappedClient.pull(), false);
+    const elapsed = performance.now() - start;
+    assert(elapsed >= 4900, `server cap returned too early: ${elapsed} ms`);
+    assert(elapsed < 9000, `server cap did not bound waiting: ${elapsed} ms`);
+  }
+
+  let observePull;
+  let abortPull;
+  const longPollClient = await connectClient("long-poll", {
+    longPollTimeoutMs: 5000,
+    fetch: async (input, init) => {
+      if (String(input).endsWith("/pull-updates") && observePull) {
+        const observed = observePull;
+        observePull = undefined;
+        observed();
+        if (abortPull) {
+          return timedFetch(input, { ...init, signal: abortPull.signal });
+        }
+      }
+      return timedFetch(input, init);
+    }
+  });
+  const waiting = new Promise(resolve => { observePull = resolve; });
+  let completed = false;
+  const pulling = longPollClient.pull().then(changed => {
+    completed = true;
+    return changed;
+  });
+  await waiting;
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(completed, false);
+  const wakeStart = performance.now();
+  await clientA.exec("UPDATE t SET value = 'long-poll-update' WHERE id = 1");
+  await clientA.push();
+  assert.equal(await pulling, true);
+  assert(performance.now() - wakeStart < 4000, "published update did not wake the pull before its deadline");
+  assert.deepEqual(await rows(longPollClient, "SELECT value FROM t WHERE id = 1"), [
+    { value: "long-poll-update" }
+  ]);
+
+  const disconnecting = new Promise(resolve => { observePull = resolve; });
+  abortPull = new AbortController();
+  const interrupted = assert.rejects(() => longPollClient.pull());
+  await disconnecting;
+  abortPull.abort();
+  await interrupted;
+  abortPull = undefined;
+  await clientA.exec("UPDATE t SET value = 'from-js' WHERE id = 1");
+  await clientA.push();
+  assert.equal(await longPollClient.pull(), true);
+  assert.deepEqual(await rows(longPollClient, "SELECT value FROM t WHERE id = 1"), [
+    { value: "from-js" }
+  ]);
+  await clientB.pull();
+
   await assert.rejects(
     () => connectClient("ungranted", { authToken: ungrantedToken }),
     /403/

@@ -21,7 +21,6 @@
 (deftest unsupported-pull-options-are-rejected-before-database-resolution
   (doseq [[option bytes] [[:encoding [0x08 0x01]]
                           [:stream-kind [0x40 0x01]]
-                          [:long-poll-timeout-ms [0x20 0x01]]
                           [:server-query-selector [0x3a 0x01 0x71]]
                           [:client-pages [0x32 0x01 0x01]]]]
     (is (= 400 (:status ((pull/handler {}) {:body (byte-array bytes)})))

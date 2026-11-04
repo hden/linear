@@ -4,7 +4,7 @@
    [cognitect.anomalies :as anomaly]
    [promesa.core :as p])
   (:import
-   (io.slatedb.uniffi CloseReason Db DbBuilder DbSnapshot DbTransaction Error$Closed Error$Data Error$Internal Error$Invalid Error$Transaction Error$Unavailable IsolationLevel ObjectStore PutOptions Ttl$ExpireAtMillis Ttl$NoExpiry WriteHandle)
+   (io.slatedb.uniffi CloseReason Db DbBuilder DbSnapshot DbStatus DbStatusSubscription DbTransaction Error$Closed Error$Data Error$Internal Error$Invalid Error$Transaction Error$Unavailable IsolationLevel ObjectStore PutOptions Ttl$ExpireAtMillis Ttl$NoExpiry WriteHandle)
    (java.util.concurrent CompletionException ExecutionException)))
 
 (defn- closed-category [^Error$Closed error]
@@ -119,6 +119,36 @@
 
 (defn open-snapshot [database]
   (invoke :open-snapshot #(.snapshot ^Db database)))
+
+(defn- await-change [raw-subscription durable-sequence timeout-ms]
+  (let [waiting (.waitForChange ^DbStatusSubscription raw-subscription
+                  (long durable-sequence) (unchecked-int timeout-ms))]
+    (try
+      (when-let [^DbStatus status (await (invoke :await-change (constantly waiting)))]
+        (when-let [reason (.closeReason status)]
+          (when-not (identical? CloseReason/CLEAN reason)
+            (throw (classify-error (Error$Closed. reason "Database closed during revision wait")
+                     {:operation :await-change})))))
+      nil
+      (finally
+        (p/cancel waiting)))))
+
+(defn subscribe [database]
+  (try
+    (.subscribe ^Db database)
+    (catch Exception error
+      (throw (classify-error error {:operation :subscribe})))))
+
+(defn ^:no-doc change-waiter [subscription]
+  (let [durable-sequence (-> ^DbStatusSubscription subscription .status .durableSeq)]
+    (fn [{:keys [timeout-ms]}]
+      (await-change subscription durable-sequence timeout-ms))))
+
+(defmacro with-change-notifications
+  [[binding subscription] & body]
+  `(with-open [^DbStatusSubscription subscription# ~subscription]
+     (let [~binding (change-waiter subscription#)]
+       ~@body)))
 
 (defn close-snapshot! [snapshot]
   (try

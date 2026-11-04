@@ -92,6 +92,29 @@
         (ffi/await (ffi/close-database! database))
         (ffi/close-object-store! object-store)))))
 
+(deftest ^:integration interruption-exits-change-notifications-scope
+  (with-open [object-store (ffi/open-object-store "memory:///")]
+    (let [database (ffi/await (ffi/open-database! object-store "d-subscription-test"))
+          ready (promise)
+          result (promise)]
+      (try
+        (let [waiter (future
+                       (deliver result
+                                (try
+                                  (ffi/with-change-notifications [await-change (ffi/subscribe database)]
+                                    (deliver ready true)
+                                    (await-change {:timeout-ms 10000}))
+                                  (catch InterruptedException error error))))]
+          (try
+            (is (= true (deref ready 2000 ::timeout)))
+            (future-cancel waiter)
+            (is (instance? InterruptedException (deref result 2000 ::timeout)))
+            (finally
+              (future-cancel waiter)
+              (deref result 2000 ::timeout))))
+        (finally
+          (ffi/await (ffi/close-database! database)))))))
+
 (defn- compaction-settings []
   (with-open [defaults (Settings/_default)]
     (-> (.toJsonString defaults)

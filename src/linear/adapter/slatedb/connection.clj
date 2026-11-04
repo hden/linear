@@ -58,6 +58,10 @@
   `(call-with-database ~connection
      (assoc ~options :f (fn [~binding] ~@body))))
 
+(defn subscribe [connection {:keys [database-id]}]
+  (with-database [database connection {:database-id database-id}]
+    (ffi/subscribe database)))
+
 (defn close [{:keys [pool object-store]}]
   (try
     (.close ^GenericKeyedObjectPool pool)

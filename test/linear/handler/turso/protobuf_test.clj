@@ -81,6 +81,16 @@
                   0x12 0x02 0x01 0x02))
           (seq (.toByteArray output))))))
 
+(deftest long-poll-timeout-is-an-unsigned-32-bit-value
+  (is (= 0xffffffff
+         (:long-poll-timeout-ms
+           (protobuf/decode-pull (byte-array (map unchecked-byte [0x20 0xff 0xff 0xff 0xff 0x0f]))))))
+  (doseq [value [[0x20 0x80 0x80 0x80 0x80 0x10]
+                 [0x20 0xff 0xff 0xff 0xff 0xff 0xff 0xff 0xff 0xff 0x01]]]
+    (is (= ::protobuf/malformed-protobuf
+           (:reason (test/catch-ex-data
+                      #(protobuf/decode-pull (byte-array (map unchecked-byte value)))))))))
+
 (deftest protobuf-parser-rejects-truncated-length-delimited-fields
   (testing "syntax errors are codec errors, not semantic validation"
     (is (thrown? Exception

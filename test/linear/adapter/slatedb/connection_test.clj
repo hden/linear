@@ -100,6 +100,18 @@
         (future-cancel reader)
         (connection/close connection)))))
 
+(deftest ^:integration subscription-wakes-on-eviction-without-holding-capacity
+  (let [connection (new-connection)]
+    (try
+      (ffi/with-change-notifications [await-change (connection/subscribe connection {:database-id "a"})]
+        (is (use-database connection "b"))
+        (let [waiting (future (await-change {:timeout-ms 10000}))]
+          (try
+            (is (nil? (deref waiting 1000 ::timeout)))
+            (is (use-database connection "a"))
+            (finally (future-cancel waiting)))))
+      (finally (connection/close connection)))))
+
 (deftest ^:integration invalid-handles-and-callback-errors-release-capacity
   (let [connection (new-connection)]
     (try
@@ -273,3 +285,17 @@
         (try
           (doseq [reader readers] (future-cancel reader))
           (finally (connection/close connection)))))))
+
+(deftest ^:integration subscription-observes-publish-before-waiting
+  (let [connection (new-connection)]
+    (try
+      (ffi/with-change-notifications [await-change (connection/subscribe connection {:database-id "a"})]
+        (connection/with-database [database connection {:database-id "a"}]
+          (ffi/with-transaction [transaction database]
+            (ffi/await (ffi/write-values transaction [[(byte-array [1]) (byte-array [2])]]))
+            (ffi/await (ffi/commit-transaction transaction))))
+        (let [waiting (future (await-change {:timeout-ms 10000}))]
+          (try
+            (is (nil? (deref waiting 1000 ::timeout)))
+            (finally (future-cancel waiting)))))
+      (finally (connection/close connection)))))

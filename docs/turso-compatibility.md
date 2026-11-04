@@ -12,8 +12,13 @@ E2E scenarios, run by [CI](../.github/workflows/ci.yml) on Linux x64.
 | Retry after a lost push response | Supported; applied progress prevents duplicate SQL execution |
 | Atomic application data and sync progress | Supported; committed in the same revision |
 | SQL failure | Entire batch rolls back; COMMIT reports `TRANSACTION_ROLLED_BACK` |
-| Query partial sync and long polling | Unsupported |
+| Long polling | Supported |
+| Query partial sync | Unsupported |
 | MVCC and experimental remote writes | Outside the verified compatibility scope |
+
+Long polls release the database lease before waiting and recheck data and access
+after waking. In Linear, capacity eviction can wake a poll before its timeout
+and return an empty response. This is Linear behavior, not a Turso guarantee.
 
 ## Limitations
 
@@ -42,7 +47,6 @@ implementation or verification work, not passing claims for Linear:
 | [Python `test_partial_sync`](https://github.com/tursodatabase/turso/blob/v0.8.3/bindings/python/tests/test_database_sync.py) | Query bootstrap; page selection via `server_pages_selector` is implemented locally. |
 | [JavaScript partial-sync tests](https://github.com/tursodatabase/turso/blob/v0.8.3/bindings/javascript/sync/packages/native/promise.test.ts) | Partial-sync concurrency, segment size, and prefetch. |
 | [Python `test_pull_bytes_threshold`](https://github.com/tursodatabase/turso/blob/v0.8.3/bindings/python/tests/test_database_sync.py) | Upstream edge cases beyond the repeated selector-based pulls covered by E2E. |
-| [`PullUpdatesReqProtoBody.long_poll_timeout_ms`](https://github.com/tursodatabase/turso/blob/v0.8.3/sync/engine/src/server_proto.rs) | Long-poll wake-up on a newly published revision. |
 
 Upstream includes a [CLI sync server](https://github.com/tursodatabase/turso/blob/v0.8.3/cli/sync_server.rs)
 with page-selector support. Its JavaScript partial-sync tests skip that server

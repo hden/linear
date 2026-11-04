@@ -113,7 +113,17 @@
 
   revisions/RevisionWritable
   (-publish-next! [store revision database]
-    (publish! store revision database false)))
+    (publish! store revision database false))
+
+  revisions/RevisionAwaitable
+  (-await-revision [store {:keys [database-id revision-id timeout-ms]}]
+    (ffi/with-change-notifications [await-change (connection/subscribe store {:database-id database-id})]
+      (let [current-revision-id
+            (connection/with-database [database store {:database-id database-id}]
+              (ffi/with-snapshot [raw-snapshot database]
+                (:revision-id (snapshot/head-metadata #(ffi/await (ffi/read-snapshot-values raw-snapshot %))))))]
+        (when (= current-revision-id revision-id)
+          (await-change {:timeout-ms timeout-ms}))))))
 
 (defmethod integrant/init-key :linear.adapter.slatedb.store/store
   [_ options]
