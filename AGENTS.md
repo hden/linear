@@ -40,3 +40,6 @@ refs:
 * https://github.com/tursodatabase/turso
   * https://github.com/tursodatabase/libsql/blob/main/docs/HRANA_3_SPEC.md
   * https://github.com/tursodatabase/libsql/blob/main/docs/HTTP_V2_SPEC.md
+
+* Clojure asynchronous work in `src`, `test`, and `scripts` must use Promesa. Convert external asynchronous APIs at the boundary. Standard futures, promises, agents, other asynchronous libraries, and raw Future operations are forbidden by `bb lint`.
+* Promise cancellation does not prove that work has stopped. Interruption tests must interrupt the request and verify completion, resource release, and subsequent requests. Synchronous callbacks, FFI function pointers, Jetty execution infrastructure, and JavaScript SDK code are outside this replacement scope; review callback semantics explicitly.

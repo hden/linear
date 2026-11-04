@@ -175,7 +175,7 @@
 (defn- signal-if-drained! [state]
   (when (and (= :draining (:status state))
              (quiescent? state))
-    (deliver (:drained state) true)))
+    (p/resolve (:drained state) true)))
 
 (defn- callback-watchdog [resources callback-id context]
   (let [completion (p/deferred)]
@@ -473,7 +473,7 @@
                                         :files {}
                                         :callbacks {}
                                         :failure nil
-                                        :drained (promise)})}]
+                                        :drained (p/deferred)})}]
     (try
       (mem/write-int (mem/slice io-methods
                                 (io-method-offset :i-version)

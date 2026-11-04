@@ -9,7 +9,33 @@
   '#{clojure.core/with-redefs clojure.core/with-redefs-fn
      clojure.core/alter-var-root clojure.core/intern clojure.core/ns-unmap
      cljs.core/with-redefs cljs.core/with-redefs-fn
-     cljs.core/alter-var-root cljs.core/intern cljs.core/ns-unmap})
+     cljs.core/alter-var-root cljs.core/intern cljs.core/ns-unmap
+     promesa.core/with-redefs})
+
+(def ^:private non-promesa-vars
+  '#{clojure.core/future clojure.core/future-call clojure.core/future-cancel
+     clojure.core/future? clojure.core/future-done? clojure.core/future-cancelled?
+     clojure.core/promise clojure.core/deliver
+     clojure.core/agent clojure.core/send clojure.core/send-off clojure.core/send-via
+     clojure.core/await clojure.core/await-for clojure.core/pmap clojure.core/pcalls
+     clojure.core/pvalues clojure.core/seque
+     clojure.core/shutdown-agents})
+
+(def ^:private non-promesa-classes
+  '#{Thread Future FutureTask CompletableFuture CompletionStage CountDownLatch CyclicBarrier
+     Semaphore Phaser Executors ExecutorService ScheduledExecutorService
+     ThreadPoolExecutor ScheduledThreadPoolExecutor ForkJoinPool})
+
+(def ^:private non-promesa-methods
+  '#{.cancel .isCancelled .isDone .getNow .complete .completeExceptionally
+     .thenApply .thenApplyAsync .thenCompose .thenComposeAsync
+     .whenComplete .whenCompleteAsync .handleAsync .exceptionally
+     .countDown .await .submit .schedule .scheduleAtFixedRate .scheduleWithFixedDelay
+     Thread/sleep Thread/yield Thread/currentThread Thread/interrupted})
+
+(defn- other-async-namespace? [namespace]
+  (boolean (re-find #"^(?:clojure\.core\.async|cljs\.core\.async|manifold|promenade|claypoole|com\.climate\.claypoole|missionary|chime)(?:\.|$)"
+                    (str namespace))))
 
 (def ^:private dynamic-vars
   '#{clojure.core/eval clojure.core/load clojure.core/load-string clojure.core/load-file
@@ -32,6 +58,8 @@
   (let [from-layer (layer from)
         application-source? (boolean (re-find #"(?:^|/)src/" filename))]
     (cond
+      (or (non-promesa-vars to) (other-async-namespace? (namespace to)))
+      [:non-promesa-async "asynchronous work must use Promesa; convert external APIs at the boundary"]
       (= to 'clojure.core/locking)
       [:locking "locking is forbidden; prefer Clojure native data structures and primitives"]
 
@@ -98,6 +126,14 @@
         (assoc usage :rule :script-test
                :message "tests must exercise application boundaries, not verification scripts")))))
 
+(defn- explicit-interop-method [node]
+  (when (and (api/list-node? node)
+             (= '. (some-> node :children first api/sexpr)))
+    (let [[_ _ member] (api/sexpr node)
+          method-name (if (seq? member) (first member) member)]
+      (when (symbol? method-name)
+        (symbol (str "." method-name))))))
+
 (defn- node-violations [file]
   (let [filename (str file)
         root (try
@@ -107,9 +143,19 @@
     (mapcat
       (fn [node]
         (let [row (max 1 (dec (:row (meta node))))
+              interop-method (explicit-interop-method node)
               finding (fn [value rule message]
                         {:filename filename :row row :from 'source :to value :rule rule :message message})]
           (concat
+            (when (non-promesa-methods interop-method)
+              [(finding interop-method :non-promesa-async "raw asynchronous primitives must use Promesa")])
+            (when (api/token-node? node)
+              (let [value (api/sexpr node)
+                    classes (when (symbol? value)
+                              (map symbol (remove string/blank? (string/split (str value) #"[./]"))))]
+                (when (or (non-promesa-methods value)
+                          (some non-promesa-classes classes))
+                  [(finding value :non-promesa-async "raw asynchronous primitives must use Promesa")])))
             (when (and (api/token-node? node)
                        (#{'monitor-enter 'monitor-exit
                           'clojure.core/monitor-enter 'clojure.core/monitor-exit} (api/sexpr node)))
@@ -149,6 +195,10 @@
        (throw (ex-info "Policy analysis is incomplete or invalid" {:findings findings})))
      (assoc analysis :violations
             (->> (concat syntax-violations
+                         (for [{:keys [to] :as usage} (:namespace-usages analysis)
+                               :when (other-async-namespace? to)]
+                           (assoc usage :rule :non-promesa-async
+                                  :message "asynchronous libraries other than Promesa are forbidden"))
                          (script-test-violations (assoc analysis :files files))
                          (violations (:var-usages analysis)))
                  distinct
