@@ -40,7 +40,7 @@
                   ::mem/int]
                  authorizer-arena))
 
-(defn- sqlite-diagnostics [database code]
+(defn- sqlite-diagnostics [database {:keys [code]}]
   {:code             code
    :extended-code    (ffi/extended-errcode database)
    ::anomaly/message (ffi/errmsg database)})
@@ -54,7 +54,7 @@
           (reset! closed? false)
           (fault "SQLite database close failed"
                  (merge {:reason ::close-failed}
-                        (sqlite-diagnostics handle result))))))))
+                        (sqlite-diagnostics handle {:code result}))))))))
 
 (defmethod spec-for ::connection [_]
   [:fn #(instance? Connection %)])
@@ -66,19 +66,19 @@
         (fault "SQLite security configuration failed"
                (merge {:reason ::security-configuration-failed
                        :option option}
-                      (sqlite-diagnostics database result))))))
+                      (sqlite-diagnostics database {:code result}))))))
   (let [result (ffi/enable-load-extension database 0)]
     (when-not (= ffi/sqlite-ok result)
       (fault "SQLite extension loading disable failed"
              (merge {:reason ::security-configuration-failed
                      :option :extension-loading}
-                    (sqlite-diagnostics database result)))))
+                    (sqlite-diagnostics database {:code result})))))
   (let [result (ffi/set-authorizer database authorizer mem/null)]
     (when-not (= ffi/sqlite-ok result)
       (fault "SQLite ATTACH authorizer installation failed"
              (merge {:reason ::security-configuration-failed
                      :option :attach}
-                    (sqlite-diagnostics database result))))))
+                    (sqlite-diagnostics database {:code result}))))))
 
 (defn open
   {:malli/schema [:->
@@ -99,7 +99,7 @@
             (ffi/close database)
             (throw error)))
         (let [diagnostics (when-not (mem/null? database)
-                            (sqlite-diagnostics database result))]
+                            (sqlite-diagnostics database {:code result}))]
           (when-not (mem/null? database)
             (ffi/close database))
           (fault "SQLite database open failed"
@@ -113,14 +113,14 @@
     (fault "SQLite connection is closed"
            {:reason ::connection-closed})))
 
-(defn- install-authorizer! [database native-authorizer]
+(defn- install-authorizer! [database {:keys [native-authorizer]}]
   (let [result (ffi/set-authorizer database native-authorizer mem/null)]
     (when-not (= ffi/sqlite-ok result)
       (fault "SQLite authorizer change failed"
              (merge {:reason ::authorizer-change-failed}
-                    (sqlite-diagnostics database result))))))
+                    (sqlite-diagnostics database {:code result}))))))
 
-(defn- add-suppressed! [error suppressed]
+(defn- add-suppressed! [error {:keys [suppressed]}]
   (when suppressed
     (.addSuppressed ^Exception error ^Exception suppressed))
   error)
@@ -130,41 +130,41 @@
   [connection sql]
   (ensure-open! connection)
   (let [database (:handle connection)]
-    (install-authorizer! database mem/null)
+    (install-authorizer! database {:native-authorizer mem/null})
     (let [outcome (try
                     (let [result (ffi/exec database sql mem/null mem/null mem/null)]
                       (when-not (= ffi/sqlite-ok result)
                         (fault "SQLite statement failed"
                                (merge {:reason ::statement-failed
                                        :sql    sql}
-                                      (sqlite-diagnostics database result))))
+                                      (sqlite-diagnostics database {:code result}))))
                       {:value nil})
                     (catch Exception error
                       {:error error}))
           restore-error (try
-                          (install-authorizer! database authorizer)
+                          (install-authorizer! database {:native-authorizer authorizer})
                           nil
                           (catch Exception error
                             error))]
       (cond
         (:error outcome)
-        (throw (add-suppressed! (:error outcome) restore-error))
+        (throw (add-suppressed! (:error outcome) {:suppressed restore-error}))
 
         restore-error
         (throw restore-error))))
   nil)
 
-(defn- incorrect! [message data]
+(defn- incorrect! [message {:keys [data]}]
   (throw (ex-info message (assoc data ::anomaly/category ::anomaly/incorrect))))
 
-(defn- native-bytes [arena value-bytes]
+(defn- native-bytes [arena {:keys [value-bytes]}]
   (let [length  (alength ^bytes value-bytes)
         segment (mem/alloc (max 1 length) arena)]
     (when (pos? length)
       (mem/write-bytes segment length value-bytes))
     segment))
 
-(defn- sql-segment [arena sql]
+(defn- sql-segment [arena {:keys [sql]}]
   (let [sql-bytes (.getBytes ^String sql StandardCharsets/UTF_8)
         length  (alength sql-bytes)
         segment (mem/alloc (inc length) arena)]
@@ -176,7 +176,7 @@
 (defn- whitespace-byte? [value]
   (contains? #{9 10 11 12 13 32} (bit-and value 0xff)))
 
-(defn- non-whitespace-tail? [^MemorySegment sql length ^MemorySegment tail]
+(defn- non-whitespace-tail? [^MemorySegment sql {:keys [length ^MemorySegment tail]}]
   (let [offset (- (.address tail) (.address sql))]
     (and (< offset length)
          (some (fn [index]
@@ -184,8 +184,8 @@
                         (mem/read-byte (mem/slice sql index 1)))))
                (range offset length)))))
 
-(defn- prepare! [database arena sql]
-  (let [{:keys [length segment]} (sql-segment arena sql)
+(defn- prepare! [database {:keys [arena sql]}]
+  (let [{:keys [length segment]} (sql-segment arena {:sql sql})
         statement-output (mem/alloc (mem/size-of ::mem/pointer) arena)
         tail-output      (mem/alloc (mem/size-of ::mem/pointer) arena)
         result           (ffi/prepare-v3 database
@@ -200,71 +200,69 @@
       (fault "SQLite statement preparation failed"
              (merge {:reason ::statement-failed
                      :sql sql}
-                    (sqlite-diagnostics database result))))
+                    (sqlite-diagnostics database {:code result}))))
     (when (mem/null? statement)
-      (incorrect! "SQLite statement is empty"
-                  {:reason ::empty-statement :sql sql}))
-    (when (non-whitespace-tail? segment length tail)
+      (incorrect! "SQLite statement is empty" {:data {:reason ::empty-statement :sql sql}}))
+    (when (non-whitespace-tail? segment {:length length
+                                         :tail tail})
       (ffi/finalize statement)
-      (incorrect! "Multiple SQLite statements are not allowed"
-                  {:reason ::multiple-statements :sql sql}))
+      (incorrect! "Multiple SQLite statements are not allowed" {:data {:reason ::multiple-statements :sql sql}}))
     statement))
 
-(defn- bind-result! [database index result]
+(defn- bind-result! [database {:keys [index result]}]
   (when-not (= ffi/sqlite-ok result)
     (fault "SQLite parameter binding failed"
            (merge {:reason ::parameter-binding-failed
                    :index index}
-                  (sqlite-diagnostics database result)))))
+                  (sqlite-diagnostics database {:code result})))))
 
-(defn- bind-parameter! [database statement arena index value]
-  (bind-result!
-    database
-    index
-    (cond
-      (nil? value)
-      (ffi/bind-null statement index)
+(defn- bind-parameter! [database {:keys [statement arena index value]}]
+  (let [result (cond
+                 (nil? value)
+                 (ffi/bind-null statement index)
 
-      (instance? Long value)
-      (ffi/bind-int64 statement index value)
+                 (instance? Long value)
+                 (ffi/bind-int64 statement index value)
 
-      (instance? Double value)
-      (ffi/bind-double statement index value)
+                 (instance? Double value)
+                 (ffi/bind-double statement index value)
 
-      (string? value)
-      (let [bytes (.getBytes ^String value StandardCharsets/UTF_8)]
-        (ffi/bind-text64 statement
-                         index
-                         (native-bytes arena bytes)
-                         (alength bytes)
-                         mem/null
-                         ffi/sqlite-utf8))
+                 (string? value)
+                 (let [bytes (.getBytes ^String value StandardCharsets/UTF_8)]
+                   (ffi/bind-text64 statement
+                                    index
+                                    (native-bytes arena {:value-bytes bytes})
+                                    (alength bytes)
+                                    mem/null
+                                    ffi/sqlite-utf8))
 
-      (bytes? value)
-      (ffi/bind-blob64 statement
-                       index
-                       (native-bytes arena value)
-                       (alength ^bytes value)
-                       mem/null)
+                 (bytes? value)
+                 (ffi/bind-blob64 statement
+                                  index
+                                  (native-bytes arena {:value-bytes value})
+                                  (alength ^bytes value)
+                                  mem/null)
 
-      :else
-      (incorrect! "Unsupported SQLite parameter"
-                  {:reason ::unsupported-parameter
-                   :index index
-                   :type (type value)}))))
+                 :else
+                 (incorrect! "Unsupported SQLite parameter" {:data {:reason ::unsupported-parameter
+                                                                    :index index
+                                                                    :type (type value)}}))]
+    (bind-result! database {:index index :result result})))
 
-(defn- bind-parameters! [database statement arena parameters]
+(defn- bind-parameters! [database {:keys [statement arena parameters]}]
   (let [expected (ffi/bind-parameter-count statement)
         actual   (count parameters)]
     (when-not (= expected actual)
-      (incorrect! "SQLite parameter count does not match"
-                  {:reason ::parameter-count-mismatch
-                   :expected expected
-                   :actual actual})))
+      (incorrect! "SQLite parameter count does not match" {:data {:reason ::parameter-count-mismatch
+                                                                  :expected expected
+                                                                  :actual actual}})))
   (doseq [[offset value] (map-indexed vector parameters)]
-    (bind-parameter! database statement arena (inc offset) value)))
+    (bind-parameter! database {:statement statement
+                               :arena arena
+                               :index (inc offset)
+                               :value value})))
 
-(defn- step-to-completion! [database statement]
+(defn- step-to-completion! [{:keys [database statement]}]
   (loop []
     (let [result (ffi/step statement)]
       (cond
@@ -277,58 +275,60 @@
         :else
         (fault "SQLite statement failed"
                (merge {:reason ::statement-failed}
-                      (sqlite-diagnostics database result)))))))
+                      (sqlite-diagnostics database {:code result})))))))
 
-(defn- statement-finalization-error [database statement]
+(defn- statement-finalization-error [database {:keys [statement]}]
   (try
     (let [result (ffi/finalize statement)]
       (when-not (= ffi/sqlite-ok result)
         (fault "SQLite statement finalization failed"
                (merge {:reason ::statement-finalization-failed}
-                      (sqlite-diagnostics database result)))))
+                      (sqlite-diagnostics database {:code result})))))
     (catch Exception error error)))
 
-(defmacro ^:private with-statement
-  [[binding connection options] & body]
-  `(let [connection# ~connection
-         options# ~options]
-     (ensure-open! connection#)
-     (let [database# (:handle connection#)]
-       (with-open [arena# (mem/confined-arena)]
-         (let [statement# (prepare! database# arena# (:sql options#))
-               finalization-error# (volatile! nil)
-               outcome# (try
-                          (bind-parameters! database# statement# arena# (:parameters options#))
-                          {:value (let [~binding statement#] ~@body)}
-                          (catch Exception error# {:error error#})
-                          (finally
-                            (vreset! finalization-error#
-                                     (statement-finalization-error database# statement#))))]
-           (cond
-             (:error outcome#) (throw (add-suppressed! (:error outcome#) @finalization-error#))
-             @finalization-error# (throw @finalization-error#)
-             :else (:value outcome#)))))))
+(defn- call-with-statement [connection {:keys [sql parameters f]}]
+  (ensure-open! connection)
+  (let [database (:handle connection)]
+    (with-open [arena (mem/confined-arena)]
+      (let [statement (prepare! database {:arena arena
+                                          :sql sql})
+            finalization-error (volatile! nil)
+            outcome (try
+                      (bind-parameters! database {:statement statement
+                                                  :arena arena
+                                                  :parameters parameters})
+                      {:value (f {:database database :statement statement})}
+                      (catch Exception error {:error error})
+                      (finally
+                        (vreset! finalization-error
+                                 (statement-finalization-error database {:statement statement}))))]
+        (cond
+          (:error outcome) (throw (add-suppressed! (:error outcome) {:suppressed @finalization-error}))
+          @finalization-error (throw @finalization-error)
+          :else (:value outcome))))))
 
 (defn execute-statement
   {:malli/schema [:-> ::connection ::evaluator/statement :nil]}
   [connection arg-map]
-  (with-statement [statement connection arg-map]
-    (step-to-completion! (:handle connection) statement)))
+  (call-with-statement connection (assoc arg-map :f step-to-completion!)))
 
 (defn query-integers
   {:malli/schema [:-> ::connection ::evaluator/statement [:maybe [:vector :int]]]}
   [connection arg-map]
-  (with-statement [statement connection arg-map]
-    (let [result (ffi/step statement)]
-      (cond
-        (= ffi/sqlite-done result) nil
-        (= ffi/sqlite-row result)
-        (mapv (fn [index]
-                (when-not (= 1 (ffi/column-type statement {:index index}))
-                  (fault "SQLite query returned a non-integer column" {:index index}))
-                (ffi/column-int64 statement {:index index}))
-              (range (ffi/column-count statement)))
-        :else (fault "SQLite query failed" (sqlite-diagnostics (:handle connection) result))))))
+  (call-with-statement
+    connection
+    (assoc arg-map :f
+           (fn [{:keys [database statement]}]
+             (let [result (ffi/step statement)]
+               (cond
+                 (= ffi/sqlite-done result) nil
+                 (= ffi/sqlite-row result)
+                 (mapv (fn [index]
+                         (when-not (= 1 (ffi/column-type statement {:index index}))
+                           (fault "SQLite query returned a non-integer column" {:index index}))
+                         (ffi/column-int64 statement {:index index}))
+                       (range (ffi/column-count statement)))
+                 :else (fault "SQLite query failed" (sqlite-diagnostics database {:code result}))))))))
 
 (defn close
   {:malli/schema [:-> ::connection :nil]}

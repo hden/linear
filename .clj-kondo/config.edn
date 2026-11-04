@@ -4,8 +4,6 @@
   linear.adapter.slatedb.ffi/with-snapshot next.jdbc/with-transaction
   linear.adapter.slatedb.ffi/with-transaction next.jdbc/with-transaction
   linear.adapter.slatedb.ffi/with-change-notifications next.jdbc/with-transaction
-  linear.adapter.sqlite.connection/with-statement next.jdbc/with-transaction
-  linear.adapter.sqlite.evaluator/with-evaluation next.jdbc/with-transaction
   linear.adapter.sqlite.connection-test/with-connection clojure.core/fn
   linear.usecase.database/with-database next.jdbc/with-transaction
   linear.usecase.database.revisions/with-consistent-view next.jdbc/with-transaction
