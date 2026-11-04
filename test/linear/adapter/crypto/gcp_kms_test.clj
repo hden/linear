@@ -27,7 +27,7 @@
   (ApiExceptionFactory/createException (Exception. "KMS failure")
     (GrpcStatusCode/of code) false))
 
-(defn- callable [f]
+(defn- callable [{f :f}]
   (proxy [UnaryCallable] []
     (call
       ([request] (f request))
@@ -39,15 +39,15 @@
       (getOperationsStub [] nil)
       (getHttpJsonOperationsStub [] nil)
       (encryptCallable []
-        (callable (fn [request]
-                    (when requests (swap! requests conj request))
-                    (when encrypt-error (throw encrypt-error))
-                    encrypt-response)))
+        (callable {:f (fn [request]
+                        (when requests (swap! requests conj request))
+                        (when encrypt-error (throw encrypt-error))
+                        encrypt-response)}))
       (decryptCallable []
-        (callable (fn [request]
-                    (when requests (swap! requests conj request))
-                    (when decrypt-error (throw decrypt-error))
-                    decrypt-response)))
+        (callable {:f (fn [request]
+                        (when requests (swap! requests conj request))
+                        (when decrypt-error (throw decrypt-error))
+                        decrypt-response)}))
       (close [] (when closed (swap! closed inc))))))
 
 (defn- encrypt-response [ciphertext]
@@ -105,9 +105,9 @@
            [:decrypt :decrypt-error Status$Code/UNAVAILABLE ::keychain/key-service-failed]]]
     (testing (str operation " " code)
       (with-open [client (sdk-client {error-key (api-error code)})]
-        (let [result (catch-ex-data #(case operation
-                                       :encrypt (keychain/wrap (key-protection client) {:keychain (crypto/new-keychain)})
-                                       :decrypt (keychain/unwrap (key-protection client) {:ciphertext (byte-array [1])})))]
+        (let [result (catch-ex-data {:f #(case operation
+                                           :encrypt (keychain/wrap (key-protection client) {:keychain (crypto/new-keychain)})
+                                           :decrypt (keychain/unwrap (key-protection client) {:ciphertext (byte-array [1])}))})]
           (if expected
             (do (is (= expected (:reason result)))
                 (is (= :cognitect.anomalies/fault (:cognitect.anomalies/category result))))
@@ -136,9 +136,9 @@
              ["plaintext CRC mismatch" (-> decrypted .toBuilder (.setPlaintextCrc32C (Int64Value/of 0)) .build)]]]
       (testing label
         (with-open [client (sdk-client {:encrypt-response response :decrypt-response response})]
-          (let [data (catch-ex-data #(if (instance? EncryptResponse response)
-                                       (keychain/wrap (key-protection client) {:keychain (crypto/new-keychain)})
-                                       (keychain/unwrap (key-protection client) {:ciphertext (byte-array [1])})))]
+          (let [data (catch-ex-data {:f #(if (instance? EncryptResponse response)
+                                           (keychain/wrap (key-protection client) {:keychain (crypto/new-keychain)})
+                                           (keychain/unwrap (key-protection client) {:ciphertext (byte-array [1])}))})]
             (is (= ::keychain/key-service-failed (:reason data)))
             (is (= :cognitect.anomalies/fault (:cognitect.anomalies/category data)))))))))
 

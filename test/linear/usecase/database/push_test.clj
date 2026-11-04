@@ -27,7 +27,7 @@
     (-size [_] 1)
     (-fetch-pages-by-ids [_ _] {})))
 
-(defn- view [events revision-id]
+(defn- view [events {:keys [revision-id]}]
   (reify revisions/ConsistentView
     (-head [_]
       (swap! events conj :head)
@@ -37,13 +37,13 @@
     (-changes-since [_ _ _]
       #{})))
 
-(defn- application-context [datasource key-protection store evaluator]
+(defn- application-context [datasource {:keys [key-protection store evaluator]}]
   {::core/database datasource
    ::core/key-service key-protection
    ::core/revision-store store
    ::core/evaluator evaluator})
 
-(defn- sync-command [statements progress]
+(defn- sync-command [statements {:keys [progress]}]
   {:sync-progress progress
    :statements (into [{:sql "CREATE TABLE IF NOT EXISTS turso_sync_last_change_id (client_id TEXT PRIMARY KEY, pull_gen INTEGER, change_id INTEGER)"
                        :parameters []}]
@@ -60,11 +60,12 @@
           evaluator (:linear.adapter.sqlite.evaluator/evaluator system)
           {:keys [database-id key-protection keychain vault-id]}
           (postgres-data/create-database! {:datasource datasource})
-          context (application-context datasource key-protection store evaluator)
+          context (application-context datasource {:key-protection key-protection
+                                                   :store store
+                                                   :evaluator evaluator})
           args {:actor "actor-1" :database-id database-id}
           progress {:client-id "client" :generation 0 :change-id 1}
-          command (sync-command [{:sql "UPDATE t SET value = 'saved' WHERE id = 1" :parameters []}]
-                                progress)]
+          command (sync-command [{:sql "UPDATE t SET value = 'saved' WHERE id = 1" :parameters []}] {:progress progress})]
       (slatedb-data/store-root! {:store store :database-id database-id :keychain keychain
                                  :pages (sqlite-data/pages {:image (sqlite-data/sqlite-image)})})
       (is (nil? (database/sync-progress context (assoc args :client-id "client"))))
@@ -76,8 +77,7 @@
                      (database/push! context
                        (assoc args :command
                               (sync-command [{:sql "UPDATE t SET value = 'rolled-back' WHERE id = 1" :parameters []}
-                                             {:sql "INSERT INTO t VALUES (1, 'duplicate')" :parameters []}]
-                                            (assoc progress :change-id 2))))))
+                                             {:sql "INSERT INTO t VALUES (1, 'duplicate')" :parameters []}] {:progress (assoc progress :change-id 2)})))))
         (is (= progress (database/sync-progress context (assoc args :client-id "client"))))
         (is (= (:revision-id revision) (:server-revision (database/pull context args))))
         (grant/set-grant! context {:actor "actor-1" :vault-id vault-id
@@ -85,10 +85,10 @@
         (is (= progress (database/sync-progress context (assoc args :actor "reader" :client-id "client"))))
         (is (= ::anomaly/forbidden
                (::anomaly/category
-                 (catch-ex-data #(database/push! context (assoc args :actor "reader" :command command))))))
+                 (catch-ex-data {:f #(database/push! context (assoc args :actor "reader" :command command))}))))
         (is (= ::anomaly/forbidden
                (::anomaly/category
-                 (catch-ex-data #(database/sync-progress context (assoc args :actor "unknown" :client-id "client"))))))))))
+                 (catch-ex-data {:f #(database/sync-progress context (assoc args :actor "unknown" :client-id "client"))}))))))))
 
 (deftest ^:integration publication-conflict-rereads-sync-progress-before-replay
   (with-system [system (run {:keys [:duct.database/sql :duct.migrator/ragtime]})]
@@ -100,7 +100,7 @@
           publications (atom 0)
           reads (atom 0)
           store (reify revisions/ConsistentReadable
-                  (-read-consistently [_ f _] (f (view (atom []) "r-current")))
+                  (-read-consistently [_ f _] (f (view (atom []) {:revision-id "r-current"})))
                   revisions/RevisionWritable
                   (-publish-next! [_ _ _]
                     (swap! publications inc)
@@ -112,7 +112,9 @@
                       (-evaluate [_ _]
                         (swap! evaluations inc)
                         {:revision-id "r-next" :parent "r-current" :database-page-count 1 :pages {}}))]
-      (is (nil? (database/push! (application-context datasource key-protection store evaluator)
+      (is (nil? (database/push! (application-context datasource {:key-protection key-protection
+                                                                 :store store
+                                                                 :evaluator evaluator})
                   {:actor "actor-1" :database-id database-id
                    :command {:statements [] :sync-progress progress}})))
       (is (= 2 @reads))
@@ -130,7 +132,7 @@
                       revisions/ConsistentReadable
                       (-read-consistently [_ f _]
                         (swap! events conj :view)
-                        (f (view events "r-current")))
+                        (f (view events {:revision-id "r-current"})))
                       revisions/RevisionWritable
                       (-publish-next! [_ revision _]
                         (swap! events conj :publish)
@@ -142,7 +144,9 @@
                          :parent "r-current"
                          :database-page-count 1
                          :pages {}}))
-          context   (application-context datasource key-protection store evaluator)]
+          context   (application-context datasource {:key-protection key-protection
+                                                     :store store
+                                                     :evaluator evaluator})]
       (grant/set-grant! context {:actor "actor-1"
                                  :vault-id vault-id
                                  :subject "pull-actor"
@@ -161,22 +165,21 @@
       (is (= [:view :head :view :head] @events))
 
       (reset! events [])
-      (let [denied-push (catch-ex-data
-                          #(database/push! (assoc context ::core/key-service nil)
-                                           {:actor "pull-actor"
-                                            :database-id database-id
-                                            :command {:statements []}}))]
+      (let [denied-push (catch-ex-data {:f #(database/push! (assoc context ::core/key-service nil)
+                                              {:actor "pull-actor"
+                                               :database-id database-id
+                                               :command {:statements []}})})]
         (is (= ::anomaly/forbidden (::anomaly/category denied-push)))
         (is (= ::grant/permission-denied (:reason denied-push)))
         (is (empty? @events)))
       (is (= ::anomaly/forbidden
              (::anomaly/category
-               (catch-ex-data #(grant/list-grants context {:actor "pull-actor"
-                                                           :vault-id vault-id})))))
+               (catch-ex-data {:f #(grant/list-grants context {:actor "pull-actor"
+                                                               :vault-id vault-id})}))))
       (is (= ::anomaly/forbidden
              (::anomaly/category
-               (catch-ex-data #(grant/list-grants context {:actor "push-actor"
-                                                           :vault-id vault-id})))))
+               (catch-ex-data {:f #(grant/list-grants context {:actor "push-actor"
+                                                               :vault-id vault-id})}))))
 
       (is (= "r-next"
              (:revision-id (database/push! context {:actor "push-actor"
@@ -328,7 +331,7 @@
                            (swap! resolved-names conj (:display-name database))
                            (let [revision-id (first @revision-ids)]
                              (swap! revision-ids rest)
-                             (f (view (atom []) revision-id))))
+                             (f (view (atom []) {:revision-id revision-id}))))
                          revisions/RevisionWritable
                          (-publish-next! [_ revision _]
                            (if (= 1 (swap! publishes inc))
@@ -348,10 +351,10 @@
                               :parent parent
                               :database-page-count 1
                               :pages {}})))
-          result       (database/push! (application-context datasource
-                                         key-protection
-                                         store
-                                         evaluator) {:actor "actor-1" :database-id database-id :command {:statements []}})]
+          result       (database/push! (application-context datasource {:key-protection key-protection
+                                                                        :store store
+                                                                        :evaluator evaluator})
+                         {:actor "actor-1" :database-id database-id :command {:statements []}})]
       (is (= "r-second-next" (:revision-id result)))
       (is (= ["r-first" "r-second"] @evaluated))
       (is (= ["Primary" "Renamed"] @resolved-names))
@@ -367,7 +370,7 @@
           store      (reify
                        revisions/ConsistentReadable
                        (-read-consistently [_ f _]
-                         (f (view (atom []) "r-current")))
+                         (f (view (atom []) {:revision-id "r-current"})))
                        revisions/RevisionWritable
                        (-publish-next! [_ revision _]
                          (reset! published? true)
@@ -379,10 +382,10 @@
                           :database-page-count 1
                           :pages {}}))
           error      (try
-                       (database/push! (application-context datasource
-                                         key-protection
-                                         store
-                                         evaluator) {:actor "actor-1" :database-id database-id :command {:statements []}})
+                       (database/push! (application-context datasource {:key-protection key-protection
+                                                                        :store store
+                                                                        :evaluator evaluator})
+                         {:actor "actor-1" :database-id database-id :command {:statements []}})
                        nil
                        (catch clojure.lang.ExceptionInfo failure
                          failure))]
@@ -410,10 +413,10 @@
                       (-evaluate [_ _]
                         (throw (IllegalStateException. "must not evaluate"))))
           error     (try
-                      (database/push! (application-context datasource
-                                        key-protection
-                                        store
-                                        evaluator) {:actor "actor-1" :database-id database-id :command {:statements []}})
+                      (database/push! (application-context datasource {:key-protection key-protection
+                                                                       :store store
+                                                                       :evaluator evaluator})
+                        {:actor "actor-1" :database-id database-id :command {:statements []}})
                       nil
                       (catch clojure.lang.ExceptionInfo caught
                         caught))]
@@ -430,7 +433,7 @@
           store     (reify
                       revisions/ConsistentReadable
                       (-read-consistently [_ f _]
-                        (f (view (atom []) "r-current")))
+                        (f (view (atom []) {:revision-id "r-current"})))
                       revisions/RevisionWritable
                       (-publish-next! [_ _ _]
                         (swap! publishes inc)
@@ -444,10 +447,10 @@
                          :database-page-count 1
                          :pages {}}))
           error     (try
-                      (database/push! (application-context datasource
-                                        key-protection
-                                        store
-                                        evaluator) {:actor "actor-1" :database-id database-id :command {:statements []}})
+                      (database/push! (application-context datasource {:key-protection key-protection
+                                                                       :store store
+                                                                       :evaluator evaluator})
+                        {:actor "actor-1" :database-id database-id :command {:statements []}})
                       nil
                       (catch clojure.lang.ExceptionInfo caught
                         caught))]

@@ -33,18 +33,16 @@
           :requested-mode :read-write
           :kind :main-db
           :options #{:create :private-cache}}
-         (#'vfs/decode-open-request
-           "/test.db"
-           (bit-or ffi/sqlite-open-readwrite
-                   ffi/sqlite-open-create
-                   ffi/sqlite-open-main-db
-                   ffi/sqlite-open-private-cache)))))
+         (#'vfs/decode-open-request "/test.db" {:flags (bit-or ffi/sqlite-open-readwrite
+                                                         ffi/sqlite-open-create
+                                                         ffi/sqlite-open-main-db
+                                                         ffi/sqlite-open-private-cache)}))))
 
 (deftest open-result-flags-reflect-the-mode-actually-opened
   (let [requested (bit-or ffi/sqlite-open-readwrite
                           ffi/sqlite-open-create
                           ffi/sqlite-open-main-db)
-        actual (#'vfs/encode-open-result requested :read-only)]
+        actual (#'vfs/encode-open-result requested {:mode :read-only})]
     (is (zero? (bit-and actual ffi/sqlite-open-readwrite)))
     (is (= ffi/sqlite-open-readonly
            (bit-and actual ffi/sqlite-open-readonly)))
@@ -69,11 +67,9 @@
 (deftest guarded-callback-records-and-contains-exceptions
   (let [resources  (resources)
         invocation (vfs/mount resources {:path "/test.db" :filesystem (filesystem)})
-        result     (#'vfs/guarded-callback
-                     resources
-                     invocation
-                     {:operation :x-read}
-                     #(throw (ex-info "read failed" {:reason ::failed})))]
+        result     (#'vfs/guarded-callback resources {:invocation invocation
+                                                      :context {:operation :x-read}
+                                                      :f #(throw (ex-info "read failed" {:reason ::failed}))})]
     (is (= ffi/sqlite-ioerr result))
     (is (empty? (:callbacks @(:state resources))))
     (is (= :x-read (:operation (:failure @(:failure invocation)))))
@@ -83,16 +79,19 @@
 (deftest callback-failure-is-recorded-only-once
   (let [resources  (resources)
         invocation (vfs/mount resources {:path "/test.db" :filesystem (filesystem)})]
-    (#'vfs/guarded-callback resources invocation {:operation :x-read}
-                            #(throw (ex-info "first" {})))
-    (#'vfs/guarded-callback resources invocation {:operation :x-write}
-                            #(throw (ex-info "second" {})))
+    (#'vfs/guarded-callback resources {:invocation invocation
+                                       :context {:operation :x-read}
+                                       :f #(throw (ex-info "first" {}))})
+    (#'vfs/guarded-callback resources {:invocation invocation
+                                       :context {:operation :x-write}
+                                       :f #(throw (ex-info "second" {}))})
     (is (= :x-read (:operation (:failure @(:failure invocation)))))))
 
 (deftest unrouted-callback-failure-makes-the-vfs-unhealthy
   (let [resources (resources)]
-    (#'vfs/guarded-callback resources nil {:operation :x-open}
-                            #(throw (ex-info "unrouted" {})))
+    (#'vfs/guarded-callback resources {:invocation nil
+                                       :context {:operation :x-open}
+                                       :f #(throw (ex-info "unrouted" {}))})
     (is (false? (vfs/ok? resources)))))
 
 (deftest drain-signals-after-the-last-invocation-closes
@@ -111,6 +110,7 @@
 
 (deftest watchdog-timeout-permanently-fails-liveness
   (let [resources  (resources)
-        completion (#'vfs/callback-watchdog resources (Object.) {:operation :x-read})]
+        completion (#'vfs/callback-watchdog resources {:callback-id (Object.)
+                                                       :context {:operation :x-read}})]
     (p/reject completion (TimeoutException.))
     (is (false? (vfs/ok? resources)))))

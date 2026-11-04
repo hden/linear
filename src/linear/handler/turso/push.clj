@@ -9,7 +9,7 @@
   (:import
    (java.io FilterInputStream InputStream)))
 
-(defn- invalid [message reason]
+(defn- invalid [message {:keys [reason]}]
   (throw (ex-info message
                   {::anomaly/category ::anomaly/incorrect
                    ::anomaly/message message
@@ -21,14 +21,13 @@
       (string? value) (try
                         (Long/parseLong value)
                         (catch NumberFormatException _
-                          (invalid "Content-Length is invalid"
-                                    ::invalid-content-length)))
+                          (invalid "Content-Length is invalid" {:reason ::invalid-content-length})))
       :else 0)))
 
 (defn- request-too-large []
-  (invalid "Push request is too large" ::turso-request/request-too-large))
+  (invalid "Push request is too large" {:reason ::turso-request/request-too-large}))
 
-(defn- limited-input-stream [^InputStream input max-bytes]
+(defn- limited-input-stream [^InputStream input {:keys [max-bytes]}]
   (let [read-bytes (atom 0)]
     (proxy [FilterInputStream] [input]
       (read
@@ -63,7 +62,7 @@
     (try
       (handler (if (and (push-request? request)
                         (instance? InputStream body))
-                 (assoc request :body (limited-input-stream body max-bytes))
+                 (assoc request :body (limited-input-stream body {:max-bytes max-bytes}))
                  request))
       (catch clojure.lang.ExceptionInfo error
         (if (= ::turso-request/request-too-large (:reason (ex-data error)))
@@ -73,7 +72,7 @@
 (defmethod ig/init-key ::request-body-limit [_ _]
   #(wrap-request-body-limit % {:max-bytes turso-request/max-request-bytes}))
 
-(defn- handle-batch [context request batch]
+(defn- handle-batch [context {:keys [request batch]}]
   (let [{:keys [command wire-indexes]}
         (turso-request/parse-command {:body-size (request-content-length request)
                                       :batch batch})]
@@ -98,6 +97,7 @@
               {:actor (get-in request [:identity :sub])
                :database-id (get-in request [:path-params :id])
                :client-id (turso-request/metadata-client-id batch)}))
-          (handle-batch context request batch)))
+          (handle-batch context {:request request
+                                 :batch batch})))
       (catch Exception error
         (hrana/error-response (core/anomaly error))))))

@@ -9,7 +9,7 @@
    (java.sql SQLException)
    (org.postgresql.util PSQLException ServerErrorMessage)))
 
-(defn- postgres-error [sql-state constraint]
+(defn- postgres-error [sql-state {:keys [constraint]}]
   (PSQLException.
     (ServerErrorMessage.
       (str "SERROR\u0000C" sql-state
@@ -17,21 +17,20 @@
            (when constraint (str "\u0000n" constraint))
            "\u0000\u0000"))))
 
-(defn- translate [operation error]
-  (#'core/translate-error operation error))
+(defn- translate [operation {:keys [error]}]
+  (#'core/translate-error operation {:error error}))
 
-(defn- caused-by? [class error]
+(defn- caused-by? [class {:keys [error]}]
   (some #(instance? class %)
         (take-while some? (iterate ex-cause error))))
 
 (deftest translates-idempotency-conflict
-  (let [error (translate :transact
-                         (postgres-error "23505" "transactions_idempotency"))]
+  (let [error (translate :transact {:error (postgres-error "23505" {:constraint "transactions_idempotency"})})]
     (is (= ::anomaly/conflict
            (::anomaly/category (ex-data error))))
     (is (= ::core/transaction-idempotency-conflict
            (:reason (ex-data error))))
-    (is (caused-by? PSQLException error))))
+    (is (caused-by? PSQLException {:error error}))))
 
 (deftest classifies-postgres-errors
   (doseq [[sql-state constraint category]
@@ -47,9 +46,9 @@
            ["9" nil ::anomaly/fault]]]
     (testing sql-state
       (let [exception (if constraint
-                        (postgres-error sql-state constraint)
+                        (postgres-error sql-state {:constraint constraint})
                         (SQLException. "database error" sql-state))
-            error (translate :transact exception)]
+            error (translate :transact {:error exception})]
         (is (= category
                (::anomaly/category (ex-data error))))))))
 
@@ -62,7 +61,7 @@
 (deftest preserves-existing-anomaly
   (let [error (ex-info "already translated"
                        {::anomaly/category ::anomaly/unavailable})]
-    (is (identical? error (translate :query error)))))
+    (is (identical? error (translate :query {:error error})))))
 
 (deftest ^:integration query
   (with-system [sys (run {:keys [:duct.database/sql

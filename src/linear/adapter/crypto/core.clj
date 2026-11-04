@@ -32,7 +32,7 @@
                       (= key-type :sym)
                       (string? key-id)))))))
 
-(defn- decrypt-input [f]
+(defn- decrypt-input [{f :f}]
   (try
     (f)
     (catch EOFException _ nil)
@@ -45,8 +45,7 @@
   (-encrypt [keychain value options]
     (tempel/encrypt-with-symmetric-key value keychain (encryption-options options)))
   (-decrypt [keychain ciphertext options]
-    (decrypt-input
-      #(tempel/decrypt-with-symmetric-key ciphertext keychain (encryption-options options)))))
+    (decrypt-input {:f #(tempel/decrypt-with-symmetric-key ciphertext keychain (encryption-options options))})))
 
 (defn new-keychain []
   (tempel/keychain))
@@ -57,9 +56,8 @@
 
 (defn unwrap
   [master {:keys [ciphertext] :as options}]
-  (decrypt-input
-    #(when (= :encrypted-keychain (:kind (tempel/public-data ciphertext)))
-       (tempel/keychain-decrypt ciphertext (merge {:key-sym master} (encryption-options options))))))
+  (decrypt-input {:f #(when (= :encrypted-keychain (:kind (tempel/public-data ciphertext)))
+                        (tempel/keychain-decrypt ciphertext (merge {:key-sym master} (encryption-options options))))}))
 
 (defn freeze
   {:malli/schema [:-> [:fn tempel/keychain?] [:fn bytes?]]}

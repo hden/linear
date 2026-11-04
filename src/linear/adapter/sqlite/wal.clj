@@ -8,7 +8,7 @@
 (def ^:private ^:const wal-header-size 32)
 (def ^:private ^:const frame-header-size 24)
 
-(defn- u32 [^bytes bytes offset]
+(defn- u32 [^bytes bytes {:keys [offset]}]
   (bit-or (bit-shift-left (long (bit-and (aget bytes offset) 0xff)) 24)
           (bit-shift-left (long (bit-and (aget bytes (inc offset)) 0xff)) 16)
           (bit-shift-left (long (bit-and (aget bytes (+ offset 2)) 0xff)) 8)
@@ -18,7 +18,7 @@
   (and (<= 512 page-size 65536)
        (zero? (bit-and page-size (dec page-size)))))
 
-(defn- replace-range [segments write-offset ^bytes bytes]
+(defn- replace-range [segments {:keys [write-offset ^bytes bytes]}]
   (let [write-end (+ write-offset (alength bytes))]
     (vec
       (sort-by :offset
@@ -43,7 +43,7 @@
                    segments)
                  {:offset write-offset :segment (aclone bytes)})))))
 
-(defn- range-bytes [segments offset length]
+(defn- range-bytes [segments {:keys [offset length]}]
   (let [end (+ offset length)]
     (when (neg? offset)
       (fault "WAL offset must not be negative" {:reason ::invalid-offset}))
@@ -72,9 +72,10 @@
           nil)))))
 
 (defn- parse-header [capture]
-  (when-let [header (range-bytes (:segments capture) 0 wal-header-size)]
-    (let [magic (u32 header 0)
-          value (u32 header 8)
+  (when-let [header (range-bytes (:segments capture) {:offset 0
+                                                      :length wal-header-size})]
+    (let [magic (u32 header {:offset 0})
+          value (u32 header {:offset 8})
           page-size (if (= value 1) 65536 value)]
       (when-not (contains? #{0x377f0682 0x377f0683} magic)
         (fault "Invalid SQLite WAL magic" {:reason ::invalid-header :magic magic}))
@@ -87,12 +88,12 @@
   (if-let [page-size (:page-size capture)]
     (loop [capture capture]
       (let [offset (:next-frame-offset capture)]
-        (if-let [header (range-bytes (:segments capture) offset frame-header-size)]
-          (if-let [page (range-bytes (:segments capture)
-                                     (+ offset frame-header-size)
-                                     page-size)]
-            (let [page-number (u32 header 0)
-                  page-count (u32 header 4)
+        (if-let [header (range-bytes (:segments capture) {:offset offset
+                                                          :length frame-header-size})]
+          (if-let [page (range-bytes (:segments capture) {:offset (+ offset frame-header-size)
+                                                          :length page-size})]
+            (let [page-number (u32 header {:offset 0})
+                  page-count (u32 header {:offset 4})
                   _          (when-not (spec/valid? ::revisions/page-id page-number)
                                (fault "Invalid SQLite WAL page number"
                                       {:reason      ::invalid-page-number
@@ -109,7 +110,7 @@
           capture)))
     capture))
 
-(defn- reparse-frames-from [capture frame-offset]
+(defn- reparse-frames-from [capture {:keys [frame-offset]}]
   (let [capture (assoc capture
                        :page-size nil
                        :next-frame-offset frame-offset
@@ -131,12 +132,12 @@
   (when-not (and (integer? offset) (not (neg? offset)))
     (fault "WAL offset must be a non-negative integer" {:reason ::invalid-offset}))
   (let [parsed-through (:next-frame-offset capture)
-        capture (assoc capture :segments (replace-range (:segments capture) offset bytes))]
+        capture (assoc capture :segments (replace-range (:segments capture) {:write-offset offset
+                                                                             :bytes bytes}))]
     (if (< offset parsed-through)
-      (reparse-frames-from capture
-                           (if (< offset (:synced-frame-offset capture))
-                             wal-header-size
-                             (:synced-frame-offset capture)))
+      (reparse-frames-from capture {:frame-offset (if (< offset (:synced-frame-offset capture))
+                                                    wal-header-size
+                                                    (:synced-frame-offset capture))})
       (parse-frames
         (if (:page-size capture)
           capture
@@ -145,7 +146,8 @@
             capture))))))
 
 (defn read [capture offset length]
-  (let [bytes (range-bytes (:segments capture) offset length)]
+  (let [bytes (range-bytes (:segments capture) {:offset offset
+                                                :length length})]
     {:bytes (or bytes (byte-array length))
      :short-read? (nil? bytes)}))
 
@@ -176,10 +178,9 @@
                          (:segments capture))
           capture (assoc capture :segments segments)]
       (if (< length (:next-frame-offset capture))
-        (reparse-frames-from capture
-                             (if (< length (:synced-frame-offset capture))
-                               wal-header-size
-                               (:synced-frame-offset capture)))
+        (reparse-frames-from capture {:frame-offset (if (< length (:synced-frame-offset capture))
+                                                      wal-header-size
+                                                      (:synced-frame-offset capture))})
         capture))))
 
 (defn sync [capture]

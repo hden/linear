@@ -19,7 +19,7 @@
     (-fetch-pages-by-ids [_ {:keys [ids]}]
       (select-keys pages ids))))
 
-(defn- error-data [f]
+(defn- error-data [{f :f}]
   (try
     (f)
     (catch clojure.lang.ExceptionInfo error
@@ -74,7 +74,7 @@
 
 (deftest snapshot-file-rejects-missing-and-truncated-page-one-headers
   (doseq [pages [{} {1 (byte-array 17)}]]
-    (let [data (error-data #(file/snapshot-file (snapshot {:pages pages :size 1})))]
+    (let [data (error-data {:f #(file/snapshot-file (snapshot {:pages pages :size 1}))})]
       (is (= :cognitect.anomalies/fault (:cognitect.anomalies/category data)))
       (is (= ::file/missing-header (:reason data))))))
 
@@ -82,8 +82,8 @@
   (let [invalid-header (doto (byte-array 512)
                          (aset 16 (byte 2))
                          (aset 17 (byte 1)))
-        data (error-data #(file/snapshot-file
-                            (snapshot {:pages {1 invalid-header} :size 1})))]
+        data (error-data {:f #(file/snapshot-file
+                                (snapshot {:pages {1 invalid-header} :size 1}))})]
     (is (= :cognitect.anomalies/fault (:cognitect.anomalies/category data)))
     (is (= ::file/invalid-page-size (:reason data)))
     (is (= 513 (:page-size data)))))
@@ -91,7 +91,7 @@
 (deftest snapshot-file-rejects-a-missing-page-within-its-declared-size
   (let [snapshot-file (file/snapshot-file
                         (snapshot {:pages {1 (page 1)} :size 2}))
-        data (error-data #(sqlite/read snapshot-file 512 1))]
+        data (error-data {:f #(sqlite/read snapshot-file 512 1)})]
     (is (= :cognitect.anomalies/fault (:cognitect.anomalies/category data)))
     (is (= ::file/missing-page (:reason data)))
     (is (= 2 (:page-number data)))))

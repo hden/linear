@@ -33,7 +33,7 @@
           (base64url (unsigned-bytes (.getModulus public-key)))
           (base64url (unsigned-bytes (.getPublicExponent public-key)))))
 
-(defn- respond! [^HttpExchange exchange body]
+(defn- respond! [^HttpExchange exchange {:keys [body]}]
   (let [bytes (.getBytes ^String body StandardCharsets/UTF_8)]
     (.add (.getResponseHeaders exchange) "Content-Type" "application/json")
     (.sendResponseHeaders exchange 200 (alength bytes))
@@ -54,7 +54,7 @@
     (.createContext server "/.well-known/jwks.json"
                     (reify HttpHandler
                       (handle [_ exchange]
-                        (respond! exchange jwks))))
+                        (respond! exchange {:body jwks}))))
     (.start server)
     (->Fixture server
                key-pair

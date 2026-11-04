@@ -20,7 +20,7 @@
 (defn- resources [rows]
   (mapv #(update % :state keyword) rows))
 
-(defn- transaction! [tx actor]
+(defn- transaction! [tx {:keys [actor]}]
   (let [id (postgres/transaction-id)]
     (postgres/query tx {:statement {:insert-into :transactions :columns [:id :actor] :values [[id actor]]}})
     id))
@@ -68,7 +68,7 @@
                                           :order-by [[:d.id :asc]])
                         :parse-fn resources}))
   (-update-attributes! [tx {:keys [actor database-id display-name]}]
-    (let [transaction-id (transaction! tx actor)
+    (let [transaction-id (transaction! tx {:actor actor})
           attributes-id (str "a-" (ulid))]
       (postgres/query tx {:statement {:insert-into :database-attributes
                                       :columns [:id :database-id :display-name :created-by]
@@ -76,7 +76,7 @@
       (postgres/query tx {:statement {:update :databases :set {:current-attributes attributes-id}
                                       :where [:= :id database-id]}})))
   (-close! [tx {:keys [actor database-id]}]
-    (let [transaction-id (transaction! tx actor)]
+    (let [transaction-id (transaction! tx {:actor actor})]
       (postgres/query tx {:statement {:insert-into :database-tombstones
                                       :columns [:id :database-id :created-by]
                                       :values [[(str "t-" (ulid)) database-id transaction-id]]}}))))

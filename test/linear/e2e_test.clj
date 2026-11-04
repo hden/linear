@@ -13,7 +13,7 @@
 (deftest client-wait-accepts-successful-exit
   (let [process (client-process "exit 0")]
     (try
-      (is (nil? (#'e2e/wait-client! process 1000)))
+      (is (nil? (#'e2e/wait-client! process {:timeout-ms 1000})))
       (is (not (.isAlive process)))
       (finally
         (.destroyForcibly process)
@@ -23,7 +23,7 @@
   (let [process (client-process "exit 7")]
     (try
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"E2E failed"
-            (#'e2e/wait-client! process 1000)))
+            (#'e2e/wait-client! process {:timeout-ms 1000})))
       (is (= 7 (.exitValue process)))
       (finally
         (.destroyForcibly process)
@@ -34,7 +34,7 @@
         started (System/nanoTime)]
     (try
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"timed out after 50 ms"
-            (#'e2e/wait-client! process 50)))
+            (#'e2e/wait-client! process {:timeout-ms 50})))
       (is (not (.isAlive process)))
       (is (< (/ (- (System/nanoTime) started) 1000000) 5500))
       (finally
@@ -51,7 +51,7 @@
           (let [child (.get (ProcessHandle/of (Long/parseLong (.readLine reader))))]
             (try
               (is (thrown-with-msg? clojure.lang.ExceptionInfo message
-                    (#'e2e/wait-client! process timeout-ms)))
+                    (#'e2e/wait-client! process {:timeout-ms timeout-ms})))
               (is (not (.isAlive process)))
               (is (not (.isAlive child)))
               (finally

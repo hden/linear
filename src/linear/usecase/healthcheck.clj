@@ -6,7 +6,7 @@
   (-ready? [checkable])
   (-ok? [checkable]))
 
-(defn- every-check? [context predicate]
+(defn- every-check? [context {:keys [predicate]}]
   (try
     (let [checkables (core/checkables context)]
       (and (seq checkables)
@@ -17,9 +17,9 @@
 (defn ready?
   {:malli/schema [:-> [:map-of :keyword :any] :boolean]}
   [context]
-  (every-check? context #(-ready? %)))
+  (every-check? context {:predicate #(-ready? %)}))
 
 (defn ok?
   {:malli/schema [:-> [:map-of :keyword :any] :boolean]}
   [context]
-  (every-check? context #(-ok? %)))
+  (every-check? context {:predicate #(-ok? %)}))

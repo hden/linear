@@ -4,7 +4,7 @@
    [linear.usecase.core :as core]
    [linear.usecase.healthcheck :as healthcheck]))
 
-(defn- checkable [ready? ok?]
+(defn- checkable [ready? {:keys [ok?]}]
   (reify
     healthcheck/Checkable
     (-ready? [_] ready?)
@@ -12,24 +12,24 @@
 
 (deftest ready-test
   (testing "ready"
-    (let [context {::core/database  (checkable true false)
-                   ::core/evaluator (checkable true false)
+    (let [context {::core/database  (checkable true {:ok? false})
+                   ::core/evaluator (checkable true {:ok? false})
                    :logger ::logger}]
       (is (healthcheck/ready? context))))
   (testing "not ready"
-    (let [context {::core/database  (checkable true true)
-                   ::core/evaluator (checkable false true)}]
+    (let [context {::core/database  (checkable true {:ok? true})
+                   ::core/evaluator (checkable false {:ok? true})}]
       (is (not (healthcheck/ready? context))))))
 
 (deftest ok-test
   (testing "ok"
-    (let [context {::core/database  (checkable false true)
-                   ::core/evaluator (checkable false true)
+    (let [context {::core/database  (checkable false {:ok? true})
+                   ::core/evaluator (checkable false {:ok? true})
                    :logger ::logger}]
       (is (healthcheck/ok? context))))
   (testing "not ok"
-    (let [context {::core/database  (checkable true false)
-                   ::core/evaluator (checkable true true)}]
+    (let [context {::core/database  (checkable true {:ok? false})
+                   ::core/evaluator (checkable true {:ok? true})}]
       (is (not (healthcheck/ok? context))))))
 
 (deftest dependency-exceptions-make-healthchecks-false

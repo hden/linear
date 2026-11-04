@@ -6,7 +6,7 @@
 
 (def ^:private page-size 4096)
 
-(defn- put-u32! [^bytes bytes offset value]
+(defn- put-u32! [^bytes bytes {:keys [offset value]}]
   (aset-byte bytes offset (unchecked-byte (bit-shift-right value 24)))
   (aset-byte bytes (inc offset) (unchecked-byte (bit-shift-right value 16)))
   (aset-byte bytes (+ offset 2) (unchecked-byte (bit-shift-right value 8)))
@@ -16,13 +16,13 @@
 (defn- wal-header [{:keys [magic page-size]
                     :or   {magic 0x377f0682 page-size page-size}}]
   (doto (byte-array 32)
-    (put-u32! 0 magic)
-    (put-u32! 8 page-size)))
+    (put-u32! {:offset 0, :value magic})
+    (put-u32! {:offset 8, :value page-size})))
 
-(defn- frame [page-number page-count-after-commit page]
+(defn- frame [page-number {:keys [page-count-after-commit page]}]
   (let [bytes (byte-array (+ 24 page-size))]
-    (put-u32! bytes 0 page-number)
-    (put-u32! bytes 4 page-count-after-commit)
+    (put-u32! bytes {:offset 0 :value page-number})
+    (put-u32! bytes {:offset 4 :value page-count-after-commit})
     (System/arraycopy page 0 bytes 24 page-size)
     bytes))
 
@@ -30,7 +30,8 @@
   (let [page (byte-array page-size)
         capture (-> (wal/new-capture)
                     (wal/write {:offset 0 :bytes (wal-header {})})
-                    (wal/write {:offset 32 :bytes (frame 2 2 page)}))
+                    (wal/write {:offset 32 :bytes (frame 2 {:page-count-after-commit 2
+                                                            :page page})}))
         delta (wal/commit capture)]
     (is (= 2 (:database-page-count delta)))
     (is (java.util.Arrays/equals page (get-in delta [:pages 2])))))
@@ -46,11 +47,13 @@
         next-page (byte-array page-size)
         capture (-> (wal/new-capture)
                     (wal/write {:offset 0 :bytes (wal-header {})})
-                    (wal/write {:offset 32 :bytes (frame 2 2 first-page)}))
+                    (wal/write {:offset 32 :bytes (frame 2 {:page-count-after-commit 2
+                                                            :page first-page})}))
         [capture committed] (wal/sync capture)
         capture (wal/write capture
                            {:offset (+ 32 24 page-size)
-                            :bytes (frame 3 0 next-page)})]
+                            :bytes (frame 3 {:page-count-after-commit 0
+                                             :page next-page})})]
     (is (= 2 (:database-page-count committed)))
     (is (nil? (wal/commit capture)))))
 
@@ -59,8 +62,10 @@
         new-page (byte-array (repeat page-size 1))
         capture (-> (wal/new-capture)
                     (wal/write {:offset 0 :bytes (wal-header {})})
-                    (wal/write {:offset 32 :bytes (frame 2 2 old-page)})
-                    (wal/write {:offset 32 :bytes (frame 3 3 new-page)}))
+                    (wal/write {:offset 32 :bytes (frame 2 {:page-count-after-commit 2
+                                                            :page old-page})})
+                    (wal/write {:offset 32 :bytes (frame 3 {:page-count-after-commit 3
+                                                            :page new-page})}))
         candidate (wal/commit capture)]
     (is (= 3 (:database-page-count candidate)))
     (is (= #{3} (set (keys (:pages candidate)))))
@@ -71,10 +76,12 @@
         new-page (byte-array (repeat page-size 1))
         capture (-> (wal/new-capture)
                     (wal/write {:offset 0 :bytes (wal-header {})})
-                    (wal/write {:offset 32 :bytes (frame 2 2 old-page)}))
+                    (wal/write {:offset 32 :bytes (frame 2 {:page-count-after-commit 2
+                                                            :page old-page})}))
         [capture _committed] (wal/sync capture)
         candidate (-> capture
-                      (wal/write {:offset 32 :bytes (frame 3 3 new-page)})
+                      (wal/write {:offset 32 :bytes (frame 3 {:page-count-after-commit 3
+                                                              :page new-page})})
                       wal/commit)]
     (is (= 3 (:database-page-count candidate)))
     (is (= #{3} (set (keys (:pages candidate)))))))
@@ -112,7 +119,8 @@
                 (-> (wal/new-capture)
                     (wal/write {:offset 0 :bytes (wal-header {})})
                     (wal/write {:offset 32
-                                :bytes (frame 0 1 (byte-array page-size))}))
+                                :bytes (frame 0 {:page-count-after-commit 1
+                                                 :page (byte-array page-size)})}))
                 nil
                 (catch clojure.lang.ExceptionInfo ex
                   ex))]

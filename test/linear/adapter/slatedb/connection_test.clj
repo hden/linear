@@ -9,7 +9,7 @@
 (defn- new-connection []
   (connection/open {:object-store-url "memory:///" :max-open-databases 1}))
 
-(defn- use-database [connection id]
+(defn- use-database [connection {:keys [id]}]
   (connection/with-database [database connection {:database-id id}]
     (ffi/usable-database? database)))
 
@@ -69,7 +69,7 @@
           (finally (p/await next-writer 15000 ::timeout))))
       (p/resolve finish true)
       (is (= true (p/await writer 5000 ::timeout)))
-      (is (use-database connection "b"))
+      (is (use-database connection {:id "b"}))
       (finally
         (p/resolve finish true)
         (p/await writer 15000 ::timeout)
@@ -88,7 +88,7 @@
         attempting (p/deferred)]
     (try
       (is (= true (p/await ready 5000 ::timeout)))
-      (let [other (p/thread (p/resolve attempting true) (use-database connection "b"))]
+      (let [other (p/thread (p/resolve attempting true) (use-database connection {:id "b"}))]
         (try
           (is (= true (p/await attempting 5000 ::timeout)))
           (is (= ::waiting (p/await other 100 ::waiting)))
@@ -105,11 +105,11 @@
   (let [connection (new-connection)]
     (try
       (ffi/with-change-notifications [await-change (connection/subscribe connection {:database-id "a"})]
-        (is (use-database connection "b"))
+        (is (use-database connection {:id "b"}))
         (let [waiting (p/thread (await-change {:timeout-ms 10000}))]
           (try
             (is (nil? (p/await waiting 1000 ::timeout)))
-            (is (use-database connection "a"))
+            (is (use-database connection {:id "a"}))
             (finally (p/await waiting 15000 ::timeout)))))
       (finally (connection/close connection)))))
 
@@ -121,8 +121,8 @@
               (throw (ex-info "callback" {})))))
       (connection/with-database [database connection {:database-id "a"}]
         (ffi/await (ffi/close-database! database)))
-      (is (use-database connection "a"))
-      (is (use-database connection "b"))
+      (is (use-database connection {:id "a"}))
+      (is (use-database connection {:id "b"}))
       (finally (connection/close connection)))))
 
 (deftest ^:integration close-rejects-new-borrows-without-waiting-for-active-borrow
@@ -131,8 +131,8 @@
       (connection/with-database [database connection {:database-id "a"}]
         (is (nil? (connection/close connection)))
         (is (ffi/usable-database? database))
-        (is (thrown? IllegalStateException (use-database connection "b"))))
-      (is (thrown? IllegalStateException (use-database connection "a")))
+        (is (thrown? IllegalStateException (use-database connection {:id "b"}))))
+      (is (thrown? IllegalStateException (use-database connection {:id "a"})))
       (finally (connection/close connection)))))
 
 (deftest ^:integration concurrent-first-access-serializes-all-borrows
@@ -170,15 +170,15 @@
       (let [request-thread (p/deferred)
             waiter (p/thread
                      (p/resolve request-thread (px/current-thread))
-                     (try (use-database connection "b")
-                          (catch InterruptedException _ (p/resolve interrupted true))))]
+                     (try (use-database connection {:id "b"})
+                       (catch InterruptedException _ (p/resolve interrupted true))))]
         (try
           (is (= ::waiting (p/await waiter 100 ::waiting)))
           (px/interrupt (p/join request-thread))
           (is (= true (p/await interrupted 5000 ::timeout)))
           (p/resolve finish true)
           (is (= true (p/await reader 5000 ::timeout)))
-          (is (use-database connection "b"))
+          (is (use-database connection {:id "b"}))
           (finally (p/await waiter 15000 ::timeout))))
       (finally
         (p/resolve finish true)
@@ -199,17 +199,17 @@
                           (catch Exception error error))]
               (is (= ::ffi/fenced (:reason (ex-data error)))))
             (finally (ffi/await (ffi/close-database! replacement))))))
-      (is (use-database connection "a"))
-      (is (use-database connection "b"))
+      (is (use-database connection {:id "a"}))
+      (is (use-database connection {:id "b"}))
       (finally (connection/close connection)))))
 
 (deftest ^:integration failed-open-does-not-leave-a-capacity-reservation
   (let [connection (new-connection)]
     (try
-      (is (thrown? Exception (use-database connection nil)))
-      (is (use-database connection "a"))
-      (is (thrown? Exception (use-database connection nil)))
-      (is (use-database connection "b"))
+      (is (thrown? Exception (use-database connection {:id nil})))
+      (is (use-database connection {:id "a"}))
+      (is (thrown? Exception (use-database connection {:id nil})))
+      (is (use-database connection {:id "b"}))
       (finally (connection/close connection)))))
 
 (deftest ^:integration interrupted-first-acquisition-does-not-cancel-lifecycle-work
@@ -222,8 +222,8 @@
                     (catch InterruptedException _ ::interrupted)))]
     (try
       (is (= ::interrupted (p/await request 5000 ::timeout)))
-      (is (use-database connection "a"))
-      (is (use-database connection "b"))
+      (is (use-database connection {:id "a"}))
+      (is (use-database connection {:id "b"}))
       (finally
         (p/await request 15000 ::timeout)
         (connection/close connection)))))
@@ -278,8 +278,8 @@
         readers (mapv (fn [id]
                         (p/thread
                           (p/join start)
-                          (vec (repeatedly 3 #(use-database connection id)))))
-                      ["a" "a" "b" "b"])]
+                          (vec (repeatedly 3 #(use-database connection {:id id})))))
+                  ["a" "a" "b" "b"])]
     (try
       (p/resolve start true)
       (doseq [reader readers]

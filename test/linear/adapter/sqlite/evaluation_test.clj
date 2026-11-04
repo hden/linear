@@ -18,7 +18,7 @@
     (aset 16 (byte 2))
     (aset 17 (byte 0))))
 
-(defn- put-u32! [^bytes bytes offset value]
+(defn- put-u32! [^bytes bytes {:keys [offset value]}]
   (aset-byte bytes offset (unchecked-byte (bit-shift-right value 24)))
   (aset-byte bytes (inc offset) (unchecked-byte (bit-shift-right value 16)))
   (aset-byte bytes (+ offset 2) (unchecked-byte (bit-shift-right value 8)))
@@ -27,52 +27,66 @@
 
 (defn- wal-header []
   (doto (byte-array 32)
-    (put-u32! 0 0x377f0682)
-    (put-u32! 8 512)))
+    (put-u32! {:offset 0, :value 931071618})
+    (put-u32! {:offset 8, :value 512})))
 
-(defn- commit-frame [page-number database-page-count]
+(defn- commit-frame [page-number {:keys [database-page-count]}]
   (doto (byte-array (+ 24 512))
-    (put-u32! 0 page-number)
-    (put-u32! 4 database-page-count)))
+    (put-u32! {:offset 0, :value page-number})
+    (put-u32! {:offset 4, :value database-page-count})))
 
 (def ^:private snapshot (->Snapshot {1 (page)}))
 
-(defn- open-file [filesystem path mode kind]
+(defn- open-file [filesystem {:keys [path mode kind]}]
   (:file (sqlite/open filesystem
                       {:path path
                        :requested-mode mode
                        :kind kind
                        :options #{}})))
 
-(defn- accessible? [filesystem path]
+(defn- accessible? [filesystem {:keys [path]}]
   (sqlite/access filesystem {:path path :mode :exists}))
 
 (deftest routes-main-and-wal-files-without-file-identifiers
   (let [filesystem (evaluation/evaluation snapshot {:path "/linear/eval.db"})
-        main       (open-file filesystem "/linear/eval.db" :read-only :main-db)
-        wal        (open-file filesystem "/linear/eval.db-wal" :read-write :wal)]
-    (is (identical? main (open-file filesystem "/linear/eval.db" :read-only :main-db)))
-    (is (identical? wal (open-file filesystem "/linear/eval.db-wal" :read-write :wal)))
+        main       (open-file filesystem {:path "/linear/eval.db"
+                                          :mode :read-only
+                                          :kind :main-db})
+        wal        (open-file filesystem {:path "/linear/eval.db-wal"
+                                          :mode :read-write
+                                          :kind :wal})]
+    (is (identical? main (open-file filesystem {:path "/linear/eval.db"
+                                                :mode :read-only
+                                                :kind :main-db})))
+    (is (identical? wal (open-file filesystem {:path "/linear/eval.db-wal"
+                                               :mode :read-write
+                                               :kind :wal})))
     (is (= 512 (sqlite/size main)))
     (is (zero? (sqlite/size wal)))
     (is (thrown? clojure.lang.ExceptionInfo
-                 (open-file filesystem "/linear/eval.db-shm" :read-write :transient-db)))))
+                 (open-file filesystem {:path "/linear/eval.db-shm"
+                                        :mode :read-write
+                                        :kind :transient-db})))))
 
 (deftest access-and-delete-reflect-wal-state
   (let [filesystem (evaluation/evaluation snapshot {:path "/linear/eval.db"})
-        wal        (open-file filesystem "/linear/eval.db-wal" :read-write :wal)]
-    (is (true? (accessible? filesystem "/linear/eval.db")))
-    (is (false? (accessible? filesystem "/linear/eval.db-wal")))
+        wal        (open-file filesystem {:path "/linear/eval.db-wal"
+                                          :mode :read-write
+                                          :kind :wal})]
+    (is (true? (accessible? filesystem {:path "/linear/eval.db"})))
+    (is (false? (accessible? filesystem {:path "/linear/eval.db-wal"})))
     (sqlite/write wal 0 (byte-array 8))
-    (is (true? (accessible? filesystem "/linear/eval.db-wal")))
+    (is (true? (accessible? filesystem {:path "/linear/eval.db-wal"})))
     (sqlite/delete filesystem {:path "/linear/eval.db-wal"})
-    (is (false? (accessible? filesystem "/linear/eval.db-wal")))
+    (is (false? (accessible? filesystem {:path "/linear/eval.db-wal"})))
     (is (= "/linear/eval.db"
            (sqlite/full-path filesystem {:path "/linear/eval.db"})))))
 
 (deftest requires-exactly-one-commit
   (let [filesystem (evaluation/evaluation snapshot {:path "/linear/eval.db"})
-        wal-file (open-file filesystem "/linear/eval.db-wal" :read-write :wal)]
+        wal-file (open-file filesystem {:path "/linear/eval.db-wal"
+                                        :mode :read-write
+                                        :kind :wal})]
     (is (nil? (evaluation/commit filesystem)))
     (sqlite/write wal-file 0 (wal-header))
     (let [missing (try
@@ -83,11 +97,13 @@
       (is (= ::anomaly/incorrect (-> missing ex-data ::anomaly/category)))
       (is (= ::evaluation/missing-commit (:reason (ex-data missing))))))
   (let [filesystem (evaluation/evaluation snapshot {:path "/linear/eval.db"})
-        wal-file   (open-file filesystem "/linear/eval.db-wal" :read-write :wal)]
+        wal-file   (open-file filesystem {:path "/linear/eval.db-wal"
+                                          :mode :read-write
+                                          :kind :wal})]
     (sqlite/write wal-file 0 (wal-header))
-    (sqlite/write wal-file 32 (commit-frame 1 1))
+    (sqlite/write wal-file 32 (commit-frame 1 {:database-page-count 1}))
     (sqlite/sync wal-file)
-    (sqlite/write wal-file (+ 32 24 512) (commit-frame 2 2))
+    (sqlite/write wal-file (+ 32 24 512) (commit-frame 2 {:database-page-count 2}))
     (sqlite/sync wal-file)
     (let [multiple (try
                      (evaluation/commit filesystem)

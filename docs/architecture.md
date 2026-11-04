@@ -242,7 +242,7 @@ status codes and wire formats.
 ## Enforcement
 
 `bb lint` enforces static source constraints: source policies, architectural
-rules, public API rules, and ordinary clj-kondo findings. It does not load
+rules, function interface rules, and ordinary clj-kondo findings. It does not load
 application namespaces. `bb architecture` and `bb policy:check` remain focused
 commands for dependency rules and source policies respectively.
 

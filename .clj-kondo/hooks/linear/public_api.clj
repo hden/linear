@@ -19,14 +19,11 @@
 (defn check-definition [{:keys [node ns config]}]
   (let [[_ name-node & tail] (:children node)
         tail (if (api/string-node? (first tail)) (rest tail) tail)
-        attributes (when (api/map-node? (first tail)) (api/sexpr (first tail)))
-        tail (if attributes (rest tail) tail)
+        tail (if (api/map-node? (first tail)) (rest tail) tail)
         var-name (api/sexpr name-node)
         qualified-var (symbol (str ns) (str var-name))
         exceptions (get-in config [:linters :linear/public-api :exceptions])]
-    (when-not (or (api/generated-node? node)
-                  (:private (meta var-name))
-                  (:private attributes))
+    (when-not (api/generated-node? node)
       (doseq [args (arguments tail)
               :let [values (api/sexpr args)
                     amp-index (first (keep-indexed (fn [index value] (when (= '& value) index)) values))

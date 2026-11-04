@@ -21,7 +21,6 @@ Run relevant application tests for behavior changes. The Stop hook runs static l
 ## Conventions
 
 - Prefer Clojure data and primitives. Use atoms/refs for coordinated state and Promesa for asynchronous work; convert external async APIs at boundaries.
-- Public functions take an argument map or `[target arg-map]`; zero/one-argument value operations are allowed. Positional exceptions require a qualified var, arity, and reason in `.clj-kondo/config.edn`.
 - Use Malli instrumentation for controlled boundaries; reserve runtime validation for unavoidable external boundaries. Keep unreused schemas inline.
 - Use `!` only for functions whose purpose is side effects, earmuffs only for dynamic Vars, and no trailing `*` names.
 - Guarantee resource release with `with-open` or `try`/`finally`. Catch only exceptions requiring recovery or conversion; do not add `catch Throwable` for cleanup.

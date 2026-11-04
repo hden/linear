@@ -68,7 +68,7 @@
                  (.getServerErrorMessage ^PSQLException error)]
         (.getConstraint server-error)))))
 
-(defn- sql-category [state constraint]
+(defn- sql-category [state {:keys [constraint]}]
   (cond
     (and (= unique-violation state)
          (= transactions-idempotency constraint))
@@ -99,12 +99,12 @@
     ::anomaly/unavailable "PostgreSQL is unavailable"
     "PostgreSQL operation failed"))
 
-(defn- translate-error [operation error]
+(defn- translate-error [operation {:keys [error]}]
   (if (::anomaly/category (ex-data error))
     error
     (let [state    (sql-state error)
           constraint (constraint error)
-          category (sql-category state constraint)
+          category (sql-category state {:constraint constraint})
           reason   (if (and (= unique-violation state)
                             (= transactions-idempotency constraint))
                      ::transaction-idempotency-conflict
@@ -138,7 +138,7 @@
                                (honeysql/format statement)
                                {:builder-fn result-set/as-unqualified-kebab-maps})))
     (catch Exception ex
-      (throw (translate-error :query ex)))))
+      (throw (translate-error :query {:error ex})))))
 
 (defn transaction-id []
   (str "tx-" (ulid)))
@@ -174,4 +174,4 @@
               (mapcat execute-statement!)
               statements)))
     (catch Exception ex
-      (throw (translate-error :transact ex)))))
+      (throw (translate-error :transact {:error ex})))))

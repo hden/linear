@@ -5,7 +5,7 @@
         :task (apply clojure "-M:duct:test" "--test" *command-line-args*)}
   policy:check {:doc "Checks non-suppressible source policies"
                 :task (shell "clojure" "-M:policy")}
-  lint {:doc "Checks source policies, architectural dependencies, public APIs, and clj-kondo findings without loading application code"
+  lint {:doc "Checks source policies, architectural dependencies, function interfaces, and clj-kondo findings without loading application code"
         :task (do
                 (when (seq *command-line-args*)
                   (throw (ex-info "lint does not accept command-line arguments" {})))

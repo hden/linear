@@ -32,7 +32,7 @@
     (str "http://127.0.0.1:" port)))
 
 (defn- http-request
-  [client base-url {:keys [body headers method path token]}]
+  [client {base-url :base-url, {:keys [body headers method path token]} :options}]
   (let [builder (HttpRequest/newBuilder (URI/create (str base-url path)))
         builder (reduce-kv (fn [request name value]
                              (.header request name value))
@@ -62,11 +62,11 @@
             actor (str "database-manager-" (random-uuid))
             token (jwt/access-token fixture {:subject actor})
             send (fn [method path body key]
-                   (http-request client base
-                     {:method method :path path :token token
-                      :body (when body (json/write-value-as-string body))
-                      :headers (cond-> {"content-type" "application/json"}
-                                 key (assoc "idempotency-key" key))}))
+                   (http-request client {:base-url base
+                                         :options {:method method :path path :token token
+                                                   :body (when body (json/write-value-as-string body))
+                                                   :headers (cond-> {"content-type" "application/json"}
+                                                              key (assoc "idempotency-key" key))}}))
             vault-id (:id (parse-json (send "POST" "/control/v1/vaults" nil (str (random-uuid)))))
             collection (str "/control/v1/vaults/" vault-id "/databases")
             key (str (random-uuid))
@@ -125,91 +125,91 @@
                  :pages (sqlite-data/pages {:image (sqlite-data/sqlite-image)})})
             metadata-body sync-metadata-request-body
             metadata-path (str "/d/" database-id "/v2/pipeline")]
-        (is (= 200 (:status (http-request client base-url
-                              {:method "GET" :path "/health/ok"}))))
-        (is (= 401 (:status (http-request client base-url
-                              {:method "POST"
-                               :path "/control/v1/vaults"
-                               :headers {"idempotency-key" "missing-token"}}))))
+        (is (= 200 (:status (http-request client {:base-url base-url
+                                                  :options {:method "GET" :path "/health/ok"}}))))
+        (is (= 401 (:status (http-request client {:base-url base-url
+                                                  :options {:method "POST"
+                                                            :path "/control/v1/vaults"
+                                                            :headers {"idempotency-key" "missing-token"}}}))))
         (let [idempotency-key (str "http-vault-" (random-uuid))
-              created (http-request client base-url
-                                    {:method "POST"
-                                     :path "/control/v1/vaults"
-                                     :token owner-jwt
-                                     :headers {"idempotency-key" idempotency-key}})
+              created (http-request client {:base-url base-url
+                                            :options {:method "POST"
+                                                      :path "/control/v1/vaults"
+                                                      :token owner-jwt
+                                                      :headers {"idempotency-key" idempotency-key}}})
               created-id (:id (parse-json created))
               grants-path (str "/control/v1/vaults/" created-id "/grants")]
           (is (= 201 (:status created)))
           (is (= [{:subject owner :permission "manage"}]
                  (:grants
                    (parse-json
-                     (http-request client base-url
-                                   {:method "GET"
-                                    :path grants-path
-                                    :token owner-jwt})))))
-          (is (= 204 (:status (http-request client base-url
-                                {:method "DELETE"
-                                 :path (str grants-path "/" (encode-path-segment owner))
-                                 :token owner-jwt}))))
-          (let [replayed (http-request client base-url
-                                       {:method "POST"
-                                        :path "/control/v1/vaults"
-                                        :token owner-jwt
-                                        :headers {"idempotency-key" idempotency-key}})]
+                     (http-request client {:base-url base-url
+                                           :options {:method "GET"
+                                                     :path grants-path
+                                                     :token owner-jwt}})))))
+          (is (= 204 (:status (http-request client {:base-url base-url
+                                                    :options {:method "DELETE"
+                                                              :path (str grants-path "/" (encode-path-segment owner))
+                                                              :token owner-jwt}}))))
+          (let [replayed (http-request client {:base-url base-url
+                                               :options {:method "POST"
+                                                         :path "/control/v1/vaults"
+                                                         :token owner-jwt
+                                                         :headers {"idempotency-key" idempotency-key}}})]
             (is (= 201 (:status replayed)))
             (is (= created-id (:id (parse-json replayed)))))
-          (is (= 403 (:status (http-request client base-url
-                                {:method "GET"
-                                 :path grants-path
-                                 :token owner-jwt})))))
-        (is (= 401 (:status (http-request client base-url
-                              {:method "POST"
-                               :path metadata-path
-                               :body "{"
-                               :headers {"content-type" "application/json"}}))))
-        (is (= 403 (:status (http-request client base-url
-                              {:method "POST"
-                               :path metadata-path
-                               :body metadata-body
-                               :token reader-jwt
-                               :headers {"content-type" "application/json"}}))))
+          (is (= 403 (:status (http-request client {:base-url base-url
+                                                    :options {:method "GET"
+                                                              :path grants-path
+                                                              :token owner-jwt}})))))
+        (is (= 401 (:status (http-request client {:base-url base-url
+                                                  :options {:method "POST"
+                                                            :path metadata-path
+                                                            :body "{"
+                                                            :headers {"content-type" "application/json"}}}))))
+        (is (= 403 (:status (http-request client {:base-url base-url
+                                                  :options {:method "POST"
+                                                            :path metadata-path
+                                                            :body metadata-body
+                                                            :token reader-jwt
+                                                            :headers {"content-type" "application/json"}}}))))
         (let [grant-path (str "/control/v1/vaults/" vault-id
                               "/grants/" (encode-path-segment reader))
-              response (http-request client base-url
-                                     {:method "PUT"
-                                      :path grant-path
-                                      :body "{\"permission\":\"pull\"}"
-                                      :token owner-jwt
-                                      :headers {"content-type" "application/json"}})]
+              response (http-request client {:base-url base-url
+                                             :options {:method "PUT"
+                                                       :path grant-path
+                                                       :body "{\"permission\":\"pull\"}"
+                                                       :token owner-jwt
+                                                       :headers {"content-type" "application/json"}}})]
           (is (= 204 (:status response)))
-          (is (= 200 (:status (http-request client base-url
-                                {:method "POST"
-                                 :path metadata-path
-                                 :body metadata-body
-                                 :token reader-jwt
-                                 :headers {"content-type" "application/json"}}))))
-          (is (= 403 (:status (http-request client base-url
-                                {:method "GET"
-                                 :path (str "/control/v1/vaults/" vault-id "/grants")
-                                 :token reader-jwt}))))
+          (is (= 200 (:status (http-request client {:base-url base-url
+                                                    :options {:method "POST"
+                                                              :path metadata-path
+                                                              :body metadata-body
+                                                              :token reader-jwt
+                                                              :headers {"content-type" "application/json"}}}))))
+          (is (= 403 (:status (http-request client {:base-url base-url
+                                                    :options {:method "GET"
+                                                              :path (str "/control/v1/vaults/" vault-id "/grants")
+                                                              :token reader-jwt}}))))
           (is (= [{:subject owner :permission "manage"}
                   {:subject reader :permission "pull"}]
                  (:grants
                    (parse-json
-                     (http-request client base-url
-                                   {:method "GET"
-                                    :path (str "/control/v1/vaults/" vault-id "/grants")
-                                    :token owner-jwt})))))
-          (is (= 204 (:status (http-request client base-url
-                                {:method "DELETE"
-                                 :path grant-path
-                                 :token owner-jwt}))))
-          (is (= 403 (:status (http-request client base-url
-                                {:method "POST"
-                                 :path metadata-path
-                                 :body metadata-body
-                                 :token reader-jwt
-                                 :headers {"content-type" "application/json"}})))))))))
+                     (http-request client {:base-url base-url
+                                           :options {:method "GET"
+                                                     :path (str "/control/v1/vaults/" vault-id "/grants")
+                                                     :token owner-jwt}})))))
+          (is (= 204 (:status (http-request client {:base-url base-url
+                                                    :options {:method "DELETE"
+                                                              :path grant-path
+                                                              :token owner-jwt}}))))
+          (is (= 403 (:status (http-request client {:base-url base-url
+                                                    :options {:method "POST"
+                                                              :path metadata-path
+                                                              :body metadata-body
+                                                              :token reader-jwt
+                                                              :headers {"content-type" "application/json"}}})))))))))
 
 (deftest ^:integration vault-lifecycle-routes-and-deleted-sync-metadata
   (with-open [fixture (jwt/fixture)]
@@ -223,9 +223,10 @@
             (postgres/create-database! {:datasource (:duct.database.sql/hikaricp system) :actor owner})
             path (str "/control/v1/vaults/" vault-id)
             call (fn [method suffix body]
-                   (http-request client base-url {:method method :path (str path suffix)
-                                                  :token token :body body
-                                                  :headers (when body {"content-type" "application/json"})}))
+                   (http-request client {:base-url base-url
+                                         :options {:method method :path (str path suffix)
+                                                   :token token :body body
+                                                   :headers (when body {"content-type" "application/json"})}}))
             recovery (parse-json (call "GET" "/recovery-token" nil))
             metadata-path (str "/d/" database-id "/v2/pipeline")
             metadata-body sync-metadata-request-body]
@@ -235,42 +236,43 @@
         (is (= "deleted" (:state (parse-json (call "GET" "" nil)))))
         (is (= 200 (:status (call "GET" "/grants" nil))))
         (is (= 409 (:status (call "GET" "/recovery-token" nil))))
-        (is (= 409 (:status (http-request client base-url
-                              {:method "POST" :path metadata-path :token token
-                               :body metadata-body :headers {"content-type" "application/json"}}))))
-        (is (= 409 (:status (http-request client base-url
-                              {:method "POST" :path (str "/d/" database-id "/pull-updates")
-                               :token token :body ""
-                               :headers {"content-type" "application/octet-stream"}}))))
-        (is (= 409 (:status (http-request client base-url
-                              {:method "POST" :path metadata-path :token token
-                               :body (json/write-value-as-string
-                                       {:requests [{:type "batch"
-                                                    :batch {:replication_index nil
-                                                            :steps (mapv (fn [sql]
-                                                                           {:condition (when-not (= "BEGIN IMMEDIATE" sql)
-                                                                                         {:type "not" :cond {:type "is_autocommit"}})
-                                                                            :stmt {:sql sql :sql_id nil :args [] :named_args []
-                                                                                   :want_rows false :replication_index nil}})
-                                                                         ["BEGIN IMMEDIATE" "SELECT 1" "COMMIT"])}}]})
-                               :headers {"content-type" "application/json"}}))))
+        (is (= 409 (:status (http-request client {:base-url base-url
+                                                  :options {:method "POST" :path metadata-path :token token
+                                                                                 :body metadata-body :headers {"content-type" "application/json"}}}))))
+        (is (= 409 (:status (http-request client {:base-url base-url
+                                                  :options {:method "POST" :path (str "/d/" database-id "/pull-updates")
+                                                                                 :token token :body ""
+                                                                                 :headers {"content-type" "application/octet-stream"}}}))))
+        (is (= 409 (:status (http-request client {:base-url base-url
+                                                  :options {:method "POST" :path metadata-path :token token
+                                                                                 :body (json/write-value-as-string
+                                                                                         {:requests [{:type "batch"
+                                                                                                      :batch {:replication_index nil
+                                                                                                              :steps (mapv (fn [sql]
+                                                                                                                             {:condition (when-not (= "BEGIN IMMEDIATE" sql)
+                                                                                                                                           {:type "not" :cond {:type "is_autocommit"}})
+                                                                                                                              :stmt {:sql sql :sql_id nil :args [] :named_args []
+                                                                                                                                     :want_rows false :replication_index nil}})
+                                                                                                                           ["BEGIN IMMEDIATE" "SELECT 1" "COMMIT"])}}]})
+                                                                                 :headers {"content-type" "application/json"}}}))))
         (is (= 400 (:status (call "PUT" "/recovery-token" "{\"token\":\"invalid\"}"))))
         ;; This fixture's master key is deliberately outside the application context.
         (is (= 400 (:status (call "PUT" "/recovery-token" (json/write-value-as-string recovery)))))
-        (let [created (http-request client base-url
-                        {:method "POST" :path "/control/v1/vaults" :token token
-                         :headers {"idempotency-key" (str (random-uuid))}})
+        (let [created (http-request client {:base-url base-url
+                                            :options {:method "POST" :path "/control/v1/vaults" :token token
+                                                                     :headers {"idempotency-key" (str (random-uuid))}}})
               id (:id (parse-json created))
               created-path (str "/control/v1/vaults/" id)
               args {:token token}
-              recovery-response (http-request client base-url
-                                  (assoc args :method "GET" :path (str created-path "/recovery-token")))
+              recovery-response (http-request client {:base-url base-url
+                                                      :options (assoc args :method "GET" :path (str created-path "/recovery-token"))})
               recovery-body (:body recovery-response)]
           (is (= 200 (:status recovery-response)))
-          (is (= 204 (:status (http-request client base-url (assoc args :method "DELETE" :path created-path)))))
+          (is (= 204 (:status (http-request client {:base-url base-url
+                                                    :options (assoc args :method "DELETE" :path created-path)}))))
           (dotimes [_ 2]
-            (is (= 204 (:status (http-request client base-url
-                                  (assoc args :method "PUT" :path (str created-path "/recovery-token")
-                                         :body recovery-body :headers {"content-type" "application/json"}))))))
-          (is (= "active" (:state (parse-json (http-request client base-url
-                                                (assoc args :method "GET" :path created-path)))))))))))
+            (is (= 204 (:status (http-request client {:base-url base-url
+                                                      :options (assoc args :method "PUT" :path (str created-path "/recovery-token")
+                                                                                               :body recovery-body :headers {"content-type" "application/json"})})))))
+          (is (= "active" (:state (parse-json (http-request client {:base-url base-url
+                                                                    :options (assoc args :method "GET" :path created-path)}))))))))))

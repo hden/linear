@@ -33,18 +33,18 @@
     (p/join release)
     (revisions/fetch-pages-by-ids snapshot arg-map)))
 
-(defn- caused-by? [error cause]
+(defn- caused-by? [error {:keys [cause]}]
   (loop [current error]
     (cond
       (nil? current) false
       (identical? current cause) true
       :else (recur (ex-cause current)))))
 
-(defn- error-data-by-reason [error reason]
+(defn- error-data-by-reason [error {:keys [reason]}]
   (some #(when (= reason (:reason (ex-data %))) (ex-data %))
         (take-while some? (iterate ex-cause error))))
 
-(defn- await-unready [evaluator timeout-ms]
+(defn- await-unready [evaluator {:keys [timeout-ms]}]
   (let [deadline (+ (System/nanoTime) (* timeout-ms 1000000))]
     (loop []
       (cond
@@ -174,7 +174,7 @@
                         {:snapshot base :command {:statements [statement]}})
                       nil
                       (catch clojure.lang.ExceptionInfo error error))
-              data  (error-data-by-reason error reason)]
+              data  (error-data-by-reason error {:reason reason})]
           (is (= reason (:reason data)))
           (when expected
             (is (= expected (select-keys data [:expected :actual]))))))
@@ -214,7 +214,7 @@
                       nil
                       (catch Exception error
                         error))]
-        (is (caused-by? failure cause)))
+        (is (caused-by? failure {:cause cause})))
       (let [result (evaluator/evaluate evaluator
                      {:snapshot base
                       :command {:statements
@@ -244,7 +244,7 @@
                (p/thread
                  (integrant/halt-key!
                    :linear.adapter.sqlite.evaluator/evaluator evaluator)))
-      (is (true? (await-unready evaluator 5000)))
+      (is (true? (await-unready evaluator {:timeout-ms 5000})))
       (let [error (try
                     (evaluator/evaluate evaluator
                       {:snapshot base :command {:statements []}})

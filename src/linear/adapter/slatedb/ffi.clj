@@ -43,7 +43,7 @@
     (recur (or (ex-cause error) error))
     error))
 
-(defn- invoke [operation f]
+(defn- invoke [operation {:keys [f]}]
   (-> (try
         (p/promise (f))
         (catch Exception error
@@ -57,22 +57,22 @@
     (catch Exception error
       (throw (unwrap-completion error)))))
 
-(defn- read-values-impl [operation read-value keys]
+(defn- read-values-impl [operation {:keys [read-value keys]}]
   (reduce
     (fn [values-promise key]
       (p/then values-promise
               (fn [values]
-                (p/then (invoke operation #(read-value key))
-                        #(conj values %)))))
+                (p/then (invoke operation {:f #(read-value key)})
+                  #(conj values %)))))
     (p/resolved [])
     keys))
 
-(defn- write-values-impl [transaction entries options]
+(defn- write-values-impl [transaction {:keys [entries options]}]
   (reduce
     (fn [write-promise [key value]]
       (p/then write-promise
               (fn [_previous-write]
-                (invoke :write-values #(.putWithOptions ^DbTransaction transaction key value options)))))
+                (invoke :write-values {:f #(.putWithOptions ^DbTransaction transaction key value options)}))))
     (p/resolved nil)
     entries))
 
@@ -92,24 +92,23 @@
   nil)
 
 (defn open-database! [object-store database-id]
-  (invoke :open-database
-          (fn []
-            (let [builder (DbBuilder. ^String database-id ^ObjectStore object-store)]
-              (p/finally (invoke :open-database #(.build builder))
-                         (fn [_value _error] (.close builder)))))))
+  (invoke :open-database {:f (fn []
+                               (let [builder (DbBuilder. ^String database-id ^ObjectStore object-store)]
+                                 (p/finally (invoke :open-database {:f #(.build builder)})
+                                   (fn [_value _error] (.close builder)))))}))
 
 (defn close-database! [database]
-  (p/handle (invoke :shutdown-database #(.shutdown ^Db database))
-            (fn [_value shutdown-error]
-              (let [close-error (try (.close ^Db database) nil
-                                     (catch Exception error error))]
-                (cond
-                  shutdown-error
-                  (do
-                    (when close-error
-                      (.addSuppressed ^Exception shutdown-error ^Exception close-error))
-                    (throw shutdown-error))
-                  close-error (throw close-error))))))
+  (p/handle (invoke :shutdown-database {:f #(.shutdown ^Db database)})
+    (fn [_value shutdown-error]
+      (let [close-error (try (.close ^Db database) nil
+                             (catch Exception error error))]
+        (cond
+          shutdown-error
+          (do
+            (when close-error
+              (.addSuppressed ^Exception shutdown-error ^Exception close-error))
+            (throw shutdown-error))
+          close-error (throw close-error))))))
 
 (defn usable-database? [database]
   (try
@@ -118,13 +117,13 @@
       false)))
 
 (defn open-snapshot [database]
-  (invoke :open-snapshot #(.snapshot ^Db database)))
+  (invoke :open-snapshot {:f #(.snapshot ^Db database)}))
 
-(defn- await-change [raw-subscription durable-sequence timeout-ms]
+(defn- await-change [raw-subscription {:keys [durable-sequence timeout-ms]}]
   (let [waiting (.waitForChange ^DbStatusSubscription raw-subscription
                   (long durable-sequence) (unchecked-int timeout-ms))]
     (try
-      (when-let [^DbStatus status (await (invoke :await-change (constantly waiting)))]
+      (when-let [^DbStatus status (await (invoke :await-change {:f (constantly waiting)}))]
         (when-let [reason (.closeReason status)]
           (when-not (identical? CloseReason/CLEAN reason)
             (throw (classify-error (Error$Closed. reason "Database closed during revision wait")
@@ -142,7 +141,8 @@
 (defn ^:no-doc change-waiter [subscription]
   (let [durable-sequence (-> ^DbStatusSubscription subscription .status .durableSeq)]
     (fn [{:keys [timeout-ms]}]
-      (await-change subscription durable-sequence timeout-ms))))
+      (await-change subscription {:durable-sequence durable-sequence
+                                  :timeout-ms timeout-ms}))))
 
 (defmacro with-change-notifications
   [[binding subscription] & body]
@@ -158,32 +158,33 @@
   nil)
 
 (defn read-snapshot-values [snapshot keys]
-  (read-values-impl :read-snapshot-values #(.get ^DbSnapshot snapshot %) keys))
+  (read-values-impl :read-snapshot-values {:read-value #(.get ^DbSnapshot snapshot %)
+                                           :keys keys}))
 
 (defn begin-transaction [database]
-  (invoke :begin-transaction
-          #(.begin ^Db database IsolationLevel/SERIALIZABLE_SNAPSHOT)))
+  (invoke :begin-transaction {:f #(.begin ^Db database IsolationLevel/SERIALIZABLE_SNAPSHOT)}))
 
 (defn read-transaction-values [transaction keys]
-  (read-values-impl :read-transaction-values
-                    #(.get ^DbTransaction transaction %)
-                    keys))
+  (read-values-impl :read-transaction-values {:read-value #(.get ^DbTransaction transaction %)
+                                              :keys keys}))
 
 (defn write-values [transaction entries]
-  (write-values-impl transaction entries (PutOptions. (Ttl$NoExpiry.))))
+  (write-values-impl transaction {:entries entries
+                                  :options (PutOptions. (Ttl$NoExpiry.))}))
 
 (defn write-expiring-values [transaction {:keys [entries expires-at]}]
-  (write-values-impl transaction entries (PutOptions. (Ttl$ExpireAtMillis. (long expires-at)))))
+  (write-values-impl transaction {:entries entries
+                                  :options (PutOptions. (Ttl$ExpireAtMillis. (long expires-at)))}))
 
 (defn commit-transaction [transaction]
-  (p/then (invoke :commit-transaction #(.commit ^DbTransaction transaction))
-          (fn [handle]
-            (-> (invoke :commit-transaction #(.awaitDurable ^WriteHandle handle))
-                (p/finally (fn [_value _error]
-                             (.close ^WriteHandle handle)))))))
+  (p/then (invoke :commit-transaction {:f #(.commit ^DbTransaction transaction)})
+    (fn [handle]
+      (-> (invoke :commit-transaction {:f #(.awaitDurable ^WriteHandle handle)})
+        (p/finally (fn [_value _error]
+                     (.close ^WriteHandle handle)))))))
 
 (defn rollback-transaction [transaction]
-  (invoke :rollback-transaction #(.rollback ^DbTransaction transaction)))
+  (invoke :rollback-transaction {:f #(.rollback ^DbTransaction transaction)}))
 
 (defn close-transaction! [transaction]
   (try

@@ -42,21 +42,21 @@
 (def ^:private pointer-size (mem/size-of pointer))
 (def ^:private int-size (mem/size-of ::mem/int))
 
-(defn- align-up [offset alignment]
+(defn- align-up [offset {:keys [alignment]}]
   (+ offset (mod (- alignment (mod offset alignment)) alignment)))
 
 (defn- c-struct-layout [fields]
   (let [{:keys [offsets size alignment]}
         (reduce (fn [{:keys [offsets size alignment]} [field type]]
                   (let [field-alignment (mem/align-of type)
-                        field-offset    (align-up size field-alignment)]
+                        field-offset    (align-up size {:alignment field-alignment})]
                     {:offsets   (assoc offsets field field-offset)
                      :size      (+ field-offset (mem/size-of type))
                      :alignment (max alignment field-alignment)}))
                 {:offsets {} :size 0 :alignment 1}
                 fields)]
     {:offsets offsets
-     :size    (align-up size alignment)}))
+     :size    (align-up size {:alignment alignment})}))
 
 (def ^:private sqlite3-vfs-v1-fields
   [[:i-version        ::mem/int]
@@ -104,7 +104,7 @@
 (def ^:private sqlite3-io-methods-v1-layout (c-struct-layout sqlite3-io-methods-v1-fields))
 (def ^:private sqlite3-file-layout (c-struct-layout sqlite3-file-fields))
 
-(defn- field-offset [layout field]
+(defn- field-offset [layout {:keys [field]}]
   (get-in layout [:offsets field]))
 
 (def ^:private vfs-size (:size sqlite3-vfs-v1-layout))
@@ -112,15 +112,15 @@
 (def ^:private file-size (:size sqlite3-file-layout))
 
 (defn- vfs-offset [field]
-  (field-offset sqlite3-vfs-v1-layout field))
+  (field-offset sqlite3-vfs-v1-layout {:field field}))
 
 (defn- io-method-offset [field]
-  (field-offset sqlite3-io-methods-v1-layout field))
+  (field-offset sqlite3-io-methods-v1-layout {:field field}))
 
 (defn- file-offset [field]
-  (field-offset sqlite3-file-layout field))
+  (field-offset sqlite3-file-layout {:field field}))
 
-(defn- write-file-id! [^MemorySegment native-file file-id]
+(defn- write-file-id! [^MemorySegment native-file {:keys [file-id]}]
   (let [encoded (.getBytes ^String file-id StandardCharsets/US_ASCII)]
     (when-not (= 29 (alength encoded))
       (fault "SQLite FileId has an invalid encoded length"
@@ -140,7 +140,7 @@
                                   29)
            StandardCharsets/US_ASCII))
 
-(defn- callback-failure [context ex]
+(defn- callback-failure [context {:keys [ex]}]
   (let [data (merge {::anomaly/category ::anomaly/fault}
                     (when (instance? clojure.lang.ExceptionInfo ex)
                       (ex-data ex)))]
@@ -149,16 +149,16 @@
            :file-key (:file-key context)
            :cause ex)))
 
-(defn- ptr-at [^MemorySegment segment offset]
+(defn- ptr-at [^MemorySegment segment {:keys [offset]}]
   (mem/read-address (mem/slice segment offset pointer-size)))
 
-(defn- set-ptr! [^MemorySegment segment offset pointer-value]
+(defn- set-ptr! [^MemorySegment segment {:keys [offset pointer-value]}]
   (mem/write-address (mem/slice segment offset pointer-size) pointer-value))
 
-(defn- record-callback-failure! [resources invocation context ex]
+(defn- record-callback-failure! [resources {:keys [invocation context ex]}]
   (let [failure (if (instance? VirtualMachineError ex)
                   ex
-                  (callback-failure context ex))
+                  (callback-failure context {:ex ex}))
         target  (or (:failure invocation) (:state resources))]
     (swap! target
            (fn [state]
@@ -177,57 +177,61 @@
              (quiescent? state))
     (p/resolve (:drained state) true)))
 
-(defn- callback-watchdog [resources callback-id context]
+(defn- callback-watchdog [resources {:keys [callback-id context]}]
   (let [completion (p/deferred)]
     (-> completion
         (p/timeout callback-timeout-ms)
         (p/catch TimeoutException
                  (fn [error]
-                   (record-callback-failure! resources nil
-                                             (assoc context :callback-id callback-id)
-                                             error))))
+                   (record-callback-failure! resources {:invocation nil
+                                                        :context (assoc context :callback-id callback-id)
+                                                        :ex error}))))
     completion))
 
-(defn- guarded-callback [resources invocation context f]
+(defn- guarded-callback [resources {:keys [invocation context f]}]
   (let [callback-id (Object.)
-        completion  (callback-watchdog resources callback-id context)]
+        completion  (callback-watchdog resources {:callback-id callback-id
+                                                  :context context})]
     (swap! (:state resources) assoc-in [:callbacks callback-id] context)
     (try
       (f)
       (catch Exception error
-        (record-callback-failure! resources invocation context error)
+        (record-callback-failure! resources {:invocation invocation
+                                             :context context
+                                             :ex error})
         ffi/sqlite-ioerr)
       (finally
         (let [state (swap! (:state resources) update :callbacks dissoc callback-id)]
           (p/resolve completion)
           (signal-if-drained! state))))))
 
-(defn- protect-file-callback [resources operation implementation]
+(defn- protect-file-callback [resources {:keys [operation implementation]}]
   (fn [native-file & arguments]
     (try
       (let [file-key (read-file-id native-file)
             route    (get-in @(:state resources) [:files file-key])
             context  {:operation operation :file-key file-key}]
-        (guarded-callback resources
-                          (:invocation route)
-                          context
-                          #(apply implementation file-key arguments)))
+        (guarded-callback resources {:invocation (:invocation route)
+                                     :context context
+                                     :f #(apply implementation file-key arguments)}))
       (catch Exception error
-        (record-callback-failure! resources nil {:operation operation} error)
+        (record-callback-failure! resources {:invocation nil
+                                             :context {:operation operation}
+                                             :ex error})
         ffi/sqlite-ioerr))))
 
-(defn- file-route [resources file-key]
+(defn- file-route [resources {:keys [file-key]}]
   (or (get-in @(:state resources) [:files file-key])
       (fault "SQLite VFS used an unknown file"
              {:reason ::unknown-file :file-key file-key})))
 
-(defn- file-for [resources file-key]
-  (:file (file-route resources file-key)))
+(defn- file-for [resources {:keys [file-key]}]
+  (:file (file-route resources {:file-key file-key})))
 
-(defn- invocation-for-path [resources path]
+(defn- invocation-for-path [resources {:keys [path]}]
   (get-in @(:state resources) [:paths path]))
 
-(defn- write-c-string! [^MemorySegment output capacity value]
+(defn- write-c-string! [^MemorySegment output {:keys [capacity value]}]
   (let [path-bytes (.getBytes ^String value StandardCharsets/UTF_8)
         length     (alength path-bytes)]
     (when (<= capacity length)
@@ -239,7 +243,7 @@
       (mem/copy-segment (mem/slice output 0 length) (MemorySegment/ofArray path-bytes))
       (mem/write-byte (mem/slice output length 1) (byte 0)))))
 
-(defn- read-native-bytes [^MemorySegment input length]
+(defn- read-native-bytes [^MemorySegment input {:keys [length]}]
   (let [output (byte-array length)]
     (mem/copy-segment (MemorySegment/ofArray output) (mem/reinterpret input length))
     output))
@@ -268,24 +272,26 @@
    [ffi/sqlite-open-no-follow :no-follow]
    [ffi/sqlite-open-extended-result-codes :extended-result-codes]])
 
-(defn- flag-set? [flags mask]
+(defn- flag-set? [flags {:keys [mask]}]
   (= mask (bit-and flags mask)))
 
-(defn- decode-open-request [path flags]
+(defn- decode-open-request [path {:keys [flags]}]
   {:path path
-   :requested-mode (if (flag-set? flags ffi/sqlite-open-readwrite)
+   :requested-mode (if (flag-set? flags {:mask ffi/sqlite-open-readwrite})
                      :read-write
                      :read-only)
    :kind (or (some (fn [[mask kind]]
-                     (when (flag-set? flags mask) kind))
+                     (when (flag-set? flags {:mask mask})
+                       kind))
                    open-kinds)
              :main-db)
    :options (into #{}
                   (keep (fn [[mask option]]
-                          (when (flag-set? flags mask) option)))
+                          (when (flag-set? flags {:mask mask})
+                            option)))
                   open-options)})
 
-(defn- encode-open-result [requested-flags mode]
+(defn- encode-open-result [requested-flags {:keys [mode]}]
   (-> requested-flags
       (bit-and-not ffi/sqlite-open-readonly ffi/sqlite-open-readwrite)
       (bit-or (case mode
@@ -300,9 +306,10 @@
     (fault "SQLite VFS received an unknown access mode"
            {:reason ::unknown-access-mode :flags flags})))
 
-(defn- io-callbacks [resources io-methods arena keepalive]
+(defn- io-callbacks [resources {:keys [io-methods arena keepalive]}]
   (let [register! (fn [name argument-types implementation]
-                    (let [protected (protect-file-callback resources name implementation)
+                    (let [protected (protect-file-callback resources {:operation name
+                                                                      :implementation implementation})
                           pointer   (mem/serialize protected
                                                    [::coffi/fn argument-types ::mem/int]
                                                    arena)]
@@ -311,14 +318,15 @@
     (doseq [[name argument-types implementation]
             [[:x-close [pointer]
               (fn [file-key]
-                (let [file (file-for resources file-key)]
+                (let [file (file-for resources {:file-key file-key})]
                   (sqlite/close file)
                   (swap! (:state resources) update :files dissoc file-key))
                 ffi/sqlite-ok)]
              [:x-read [pointer pointer ::mem/int ::mem/long]
               (fn [file-key buffer amount offset]
                 (let [amount (int amount)
-                      result (sqlite/read (file-for resources file-key) offset amount)
+                      result (sqlite/read (file-for resources {:file-key file-key})
+                               offset amount)
                       ^bytes bytes (:bytes result)
                       length (alength bytes)
                       output (mem/reinterpret buffer amount)
@@ -338,21 +346,22 @@
              [:x-write [pointer pointer ::mem/int ::mem/long]
               (fn [file-key buffer amount offset]
                 (let [amount (int amount)]
-                  (sqlite/write (file-for resources file-key)
-                                offset
-                                (read-native-bytes buffer amount))
+                  (sqlite/write (file-for resources {:file-key file-key})
+                    offset
+                    (read-native-bytes buffer {:length amount}))
                   ffi/sqlite-ok))]
              [:x-truncate [pointer ::mem/long]
               (fn [file-key size]
-                (sqlite/truncate (file-for resources file-key) size)
+                (sqlite/truncate (file-for resources {:file-key file-key})
+                  size)
                 ffi/sqlite-ok)]
              [:x-sync [pointer ::mem/int]
               (fn [file-key _flags]
-                (sqlite/sync (file-for resources file-key))
+                (sqlite/sync (file-for resources {:file-key file-key}))
                 ffi/sqlite-ok)]
              [:x-file-size [pointer pointer]
               (fn [file-key output]
-                (let [size (sqlite/size (file-for resources file-key))]
+                (let [size (sqlite/size (file-for resources {:file-key file-key}))]
                   (mem/write-long (mem/reinterpret output 8) size)
                   ffi/sqlite-ok))]
              [:x-lock [pointer ::mem/int] (fn [_file-key _lock] ffi/sqlite-ok)]
@@ -365,93 +374,85 @@
               (fn [_file-key _operation _argument] ffi/sqlite-notfound)]
              [:x-sector-size [pointer] (fn [_file-key] 4096)]
              [:x-device-characteristics [pointer] (fn [_file-key] 0)]]]
-      (set-ptr! io-methods
-                (io-method-offset name)
-                (register! name argument-types implementation)))))
+      (set-ptr! io-methods {:offset (io-method-offset name)
+                            :pointer-value (register! name argument-types implementation)}))))
 
 (defn- vfs-callback
-  [resources arena keepalive name argument-types invocation-fn implementation]
+  [resources {:keys [arena keepalive name argument-types invocation-fn implementation]}]
   (let [protected (fn [& arguments]
-                    (guarded-callback resources
-                                      (apply invocation-fn arguments)
-                                      {:operation name}
-                                      #(apply implementation arguments)))
+                    (guarded-callback resources {:invocation (apply invocation-fn arguments)
+                                                 :context {:operation name}
+                                                 :f #(apply implementation arguments)}))
         pointer   (mem/serialize protected [::coffi/fn argument-types ::mem/int] arena)]
     (swap! keepalive conj protected)
     pointer))
 
-(defn- install-vfs-callbacks! [resources native-vfs io-methods arena keepalive]
-  (set-ptr! native-vfs
-            (vfs-offset :x-open)
-            (vfs-callback resources
-                          arena
-                          keepalive
-                          :x-open
-                          [pointer ::mem/c-string pointer ::mem/int pointer]
-                          (fn [_native-vfs path & _]
-                            (invocation-for-path resources path))
-                          (fn [_native-vfs path native-file requested-flags output-flags]
-                            (let [native-file (mem/reinterpret native-file file-size)]
-                              (set-ptr! native-file (file-offset :p-methods) mem/null)
-                              (let [invocation (invocation-for-path resources path)
-                                    {file :file actual-mode :mode}
-                                    (sqlite/open (:filesystem invocation)
-                                                 (decode-open-request path requested-flags))
-                                    file-key    (str "vf-" (ulid))
-                                    actual-flags (encode-open-result requested-flags actual-mode)]
-                                (swap! (:state resources) assoc-in [:files file-key]
-                                       {:file file :invocation invocation})
-                                (set-ptr! native-file (file-offset :p-methods) io-methods)
-                                (write-file-id! native-file file-key)
-                                (when-not (mem/null? output-flags)
-                                  (mem/write-int (mem/reinterpret output-flags 4) actual-flags))
-                                ffi/sqlite-ok)))))
-  (set-ptr! native-vfs
-            (vfs-offset :x-delete)
-            (vfs-callback resources
-                          arena
-                          keepalive
-                          :x-delete
-                          [pointer ::mem/c-string ::mem/int]
-                          (fn [_native-vfs path & _]
-                            (invocation-for-path resources path))
-                          (fn [_native-vfs path _sync-directory]
-                            (sqlite/delete (:filesystem (invocation-for-path resources path))
-                                           {:path path})
-                            ffi/sqlite-ok)))
-  (set-ptr! native-vfs
-            (vfs-offset :x-access)
-            (vfs-callback resources
-                          arena
-                          keepalive
-                          :x-access
-                          [pointer ::mem/c-string ::mem/int pointer]
-                          (fn [_native-vfs path & _]
-                            (invocation-for-path resources path))
-                          (fn [_native-vfs path flags output]
-                            (let [filesystem (:filesystem (invocation-for-path resources path))
-                                  accessible? (and filesystem
-                                                   (sqlite/access filesystem
-                                                                  {:path path
-                                                                   :mode (decode-access-mode flags)}))]
-                              (mem/write-int (mem/reinterpret output 4) (if accessible? 1 0))
-                              ffi/sqlite-ok))))
-  (set-ptr! native-vfs
-            (vfs-offset :x-full-pathname)
-            (vfs-callback resources
-                          arena
-                          keepalive
-                          :x-full-pathname
-                          [pointer ::mem/c-string ::mem/int pointer]
-                          (fn [_native-vfs path & _]
-                            (invocation-for-path resources path))
-                          (fn [_native-vfs path capacity output]
-                            (let [filesystem (:filesystem (invocation-for-path resources path))]
-                              (write-c-string! output capacity
-                                               (if filesystem
-                                                 (sqlite/full-path filesystem {:path path})
-                                                 path)))
-                            ffi/sqlite-ok))))
+(defn- install-vfs-callbacks! [resources {:keys [native-vfs io-methods arena keepalive]}]
+  (set-ptr! native-vfs {:offset (vfs-offset :x-open)
+                        :pointer-value (vfs-callback resources {:arena arena
+                                                                :keepalive keepalive
+                                                                :name :x-open
+                                                                :argument-types [pointer ::mem/c-string pointer ::mem/int pointer]
+                                                                :invocation-fn (fn [_native-vfs path & _]
+                                                                                 (invocation-for-path resources {:path path}))
+                                                                :implementation (fn [_native-vfs path native-file requested-flags output-flags]
+                                                                                  (let [native-file (mem/reinterpret native-file file-size)]
+                                                                                    (set-ptr! native-file {:offset (file-offset :p-methods)
+                                                                                                           :pointer-value mem/null})
+                                                                                    (let [invocation (invocation-for-path resources {:path path})
+                                                                                          {file :file actual-mode :mode}
+                                                                                          (sqlite/open (:filesystem invocation)
+                                                                                                       (decode-open-request path {:flags requested-flags}))
+                                                                                          file-key    (str "vf-" (ulid))
+                                                                                          actual-flags (encode-open-result requested-flags {:mode actual-mode})]
+                                                                                      (swap! (:state resources) assoc-in [:files file-key]
+                                                                                             {:file file :invocation invocation})
+                                                                                      (set-ptr! native-file {:offset (file-offset :p-methods)
+                                                                                                             :pointer-value io-methods})
+                                                                                      (write-file-id! native-file {:file-id file-key})
+                                                                                      (when-not (mem/null? output-flags)
+                                                                                        (mem/write-int (mem/reinterpret output-flags 4) actual-flags))
+                                                                                      ffi/sqlite-ok)))})})
+  (set-ptr! native-vfs {:offset (vfs-offset :x-delete)
+                        :pointer-value (vfs-callback resources {:arena arena
+                                                                :keepalive keepalive
+                                                                :name :x-delete
+                                                                :argument-types [pointer ::mem/c-string ::mem/int]
+                                                                :invocation-fn (fn [_native-vfs path & _]
+                                                                                 (invocation-for-path resources {:path path}))
+                                                                :implementation (fn [_native-vfs path _sync-directory]
+                                                                                  (sqlite/delete (:filesystem (invocation-for-path resources {:path path}))
+                                                                                    {:path path})
+                                                                                  ffi/sqlite-ok)})})
+  (set-ptr! native-vfs {:offset (vfs-offset :x-access)
+                        :pointer-value (vfs-callback resources {:arena arena
+                                                                :keepalive keepalive
+                                                                :name :x-access
+                                                                :argument-types [pointer ::mem/c-string ::mem/int pointer]
+                                                                :invocation-fn (fn [_native-vfs path & _]
+                                                                                 (invocation-for-path resources {:path path}))
+                                                                :implementation (fn [_native-vfs path flags output]
+                                                                                  (let [filesystem (:filesystem (invocation-for-path resources {:path path}))
+                                                                                        accessible? (and filesystem
+                                                                                                         (sqlite/access filesystem
+                                                                                                                        {:path path
+                                                                                                                         :mode (decode-access-mode flags)}))]
+                                                                                    (mem/write-int (mem/reinterpret output 4) (if accessible? 1 0))
+                                                                                    ffi/sqlite-ok))})})
+  (set-ptr! native-vfs {:offset (vfs-offset :x-full-pathname)
+                        :pointer-value (vfs-callback resources {:arena arena
+                                                                :keepalive keepalive
+                                                                :name :x-full-pathname
+                                                                :argument-types [pointer ::mem/c-string ::mem/int pointer]
+                                                                :invocation-fn (fn [_native-vfs path & _]
+                                                                                 (invocation-for-path resources {:path path}))
+                                                                :implementation (fn [_native-vfs path capacity output]
+                                                                                  (let [filesystem (:filesystem (invocation-for-path resources {:path path}))]
+                                                                                    (write-c-string! output {:capacity capacity
+                                                                                                             :value (if filesystem
+                                                                                                                      (sqlite/full-path filesystem {:path path})
+                                                                                                                      path)}))
+                                                                                  ffi/sqlite-ok)})}))
 
 (defn install
   {:malli/schema [:-> ::options ::resources]}
@@ -479,7 +480,9 @@
                                 (io-method-offset :i-version)
                                 int-size)
                      sqlite-io-methods-version)
-      (io-callbacks resources io-methods arena keepalive)
+      (io-callbacks resources {:io-methods io-methods
+                               :arena arena
+                               :keepalive keepalive})
       (mem/write-int (mem/slice native-vfs
                                 (vfs-offset :i-version)
                                 int-size)
@@ -494,14 +497,19 @@
                      (mem/read-int (mem/slice parent-vfs
                                               (vfs-offset :mx-pathname)
                                               int-size)))
-      (set-ptr! native-vfs (vfs-offset :p-next) mem/null)
-      (set-ptr! native-vfs (vfs-offset :z-name) (mem/serialize name ::mem/c-string arena))
-      (set-ptr! native-vfs (vfs-offset :p-app-data) parent)
+      (set-ptr! native-vfs {:offset (vfs-offset :p-next)
+                            :pointer-value mem/null})
+      (set-ptr! native-vfs {:offset (vfs-offset :z-name)
+                            :pointer-value (mem/serialize name ::mem/c-string arena)})
+      (set-ptr! native-vfs {:offset (vfs-offset :p-app-data)
+                            :pointer-value parent})
       (doseq [[field _] sqlite3-vfs-v1-callback-fields]
-        (set-ptr! native-vfs
-                  (vfs-offset field)
-                  (ptr-at parent-vfs (vfs-offset field))))
-      (install-vfs-callbacks! resources native-vfs io-methods arena keepalive)
+        (set-ptr! native-vfs {:offset (vfs-offset field)
+                              :pointer-value (ptr-at parent-vfs {:offset (vfs-offset field)})}))
+      (install-vfs-callbacks! resources {:native-vfs native-vfs
+                                         :io-methods io-methods
+                                         :arena arena
+                                         :keepalive keepalive})
       (let [resources (assoc resources :callbacks @keepalive)
             result    (ffi/vfs-register native-vfs)]
         (if (zero? result)

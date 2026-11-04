@@ -39,7 +39,7 @@
                           {:timeout-ms 5000 :pid (.pid process)}
                           error)))))))
 
-(defn- wait-client! [^Process process timeout-ms]
+(defn- wait-client! [^Process process {:keys [timeout-ms]}]
   (let [deadline (+ (System/nanoTime) (.toNanos TimeUnit/MILLISECONDS timeout-ms))
         descendants (volatile! #{})
         succeeded? (volatile! false)
@@ -69,7 +69,7 @@
             (vswap! descendants into (iterator-seq (.iterator stream))))
           (stop-client! (concat @descendants [(.toHandle process)])))))))
 
-(defn- run-client! [url tokens]
+(defn- run-client! [url {:keys [tokens]}]
   (let [builder     (ProcessBuilder. ["npm" "run" "e2e" "--" url])
         environment (.environment builder)]
     (doseq [[name token] tokens]
@@ -77,7 +77,7 @@
     (let [process (-> builder
                       (.inheritIO)
                       (.start))]
-      (wait-client! process 120000))))
+      (wait-client! process {:timeout-ms 120000}))))
 
 (defn -main []
   (with-open [fixture (jwt/fixture)]
@@ -90,10 +90,9 @@
                             :vars     (assoc (jwt/oidc-vars fixture)
                                         'port 0 'max-long-poll-timeout-ms 5000)})]
       (try
-        (run-client! (server-url system)
-                     {"LINEAR_E2E_MANAGER_TOKEN" (jwt/access-token fixture {:subject manager})
-                      "LINEAR_E2E_READER_TOKEN" (jwt/access-token fixture {:subject reader})
-                      "LINEAR_E2E_READER_SUBJECT" reader
-                      "LINEAR_E2E_UNGRANTED_TOKEN" (jwt/access-token fixture {:subject ungranted})})
+        (run-client! (server-url system) {:tokens {"LINEAR_E2E_MANAGER_TOKEN" (jwt/access-token fixture {:subject manager})
+                                                   "LINEAR_E2E_READER_TOKEN" (jwt/access-token fixture {:subject reader})
+                                                   "LINEAR_E2E_READER_SUBJECT" reader
+                                                   "LINEAR_E2E_UNGRANTED_TOKEN" (jwt/access-token fixture {:subject ungranted})}})
         (finally
           (integrant/halt! system))))))

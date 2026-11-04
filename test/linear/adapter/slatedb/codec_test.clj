@@ -38,11 +38,9 @@
         ciphertext (codec/encode-page keychain {:record-key source :page page})]
     (is (Arrays/equals page (codec/decode-page keychain {:record-key source :value ciphertext})))
     (is (= ::codec/unreadable-record
-           (:reason (test/catch-ex-data
-                      #(codec/decode-page other {:record-key source :value ciphertext})))))
+           (:reason (test/catch-ex-data {:f #(codec/decode-page other {:record-key source :value ciphertext})}))))
     (is (= ::codec/unreadable-record
-           (:reason (test/catch-ex-data
-                      #(codec/decode-page keychain {:record-key target :value ciphertext})))))))
+           (:reason (test/catch-ex-data {:f #(codec/decode-page keychain {:record-key target :value ciphertext})}))))))
 
 (deftest revision-codec-retains-before-images-and-absent-pages
   (let [keychain  (fake-keychain :primary)

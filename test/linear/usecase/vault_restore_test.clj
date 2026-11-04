@@ -50,7 +50,7 @@
     (testing (str state ": ciphertext cannot be authenticated")
       (let [{:keys [context calls] stored-state :state}
             (data/fixture {:stored stored :unwrap (constantly nil)})
-            error-data (catch-ex-data #(restore context))]
+            error-data (catch-ex-data {:f #(restore context)})]
         (is (= ::anomaly/incorrect (::anomaly/category error-data)))
         (is (= ::vault/invalid-recovery-token (:reason error-data)))
         (is (= stored @stored-state))
@@ -76,7 +76,7 @@
 
 (deftest restoration-requires-manage-permission-before-unwrapping
   (let [{:keys [context state calls]} (data/fixture {:stored {:id "v-test"} :permission :pull})
-        error-data (catch-ex-data #(restore context))]
+        error-data (catch-ex-data {:f #(restore context)})]
     (is (= ::anomaly/forbidden (::anomaly/category error-data)))
     (is (= {:id "v-test"} @state))
     (is (empty? (data/calls-for calls {:operation :unwrap})))
