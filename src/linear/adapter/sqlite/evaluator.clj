@@ -12,7 +12,8 @@
    [linear.spec :refer [spec-for]]
    [linear.usecase.database.evaluator :as evaluator]
    [linear.usecase.database.revisions :as revisions]
-   [linear.usecase.healthcheck :as healthcheck])
+   [linear.usecase.healthcheck :as healthcheck]
+   [promesa.core :as p])
   (:import
    (dev.failsafe TimeoutExceededException)))
 
@@ -79,7 +80,7 @@
 
 (defn- signal-if-drained! [{:keys [status active drained]}]
   (when (and (= :draining status) (zero? active))
-    (deliver drained true)))
+    (p/resolve drained true)))
 
 (defn- end-evaluation! [state]
   (signal-if-drained! (swap! state update :active dec)))
@@ -156,7 +157,7 @@
                (atom {:status :ready
                       :liveness :ok
                       :active 0
-                      :drained (promise)})
+                      :drained (p/deferred)})
                shutdown-timeout-ms))
 
 (defmethod integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator
@@ -165,7 +166,7 @@
   (let [drained? (try
                    (with-timeout {:timeout-ms (:shutdown-timeout-ms evaluator)
                                   :interrupt? true}
-                     @(:drained @(:state evaluator)))
+                     (p/join (:drained @(:state evaluator))))
                    true
                    (catch TimeoutExceededException _
                      false))]

@@ -4,7 +4,8 @@
    [clojure.test :refer [deftest is testing]]
    [cognitect.anomalies :as anomaly]
    [linear.adapter.slatedb.ffi :as ffi]
-   [promesa.core :as p])
+   [promesa.core :as p]
+   [promesa.exec :as px])
   (:import
    (io.slatedb.uniffi CloseReason Db DbBuilder Error$Closed Error$Data Error$Internal Error$Invalid Error$Transaction Error$Unavailable FlushOptions FlushType Settings)
    (java.nio.charset StandardCharsets)
@@ -143,7 +144,7 @@
         (let [deadline (+ (System/nanoTime) 10000000000)]
           (loop []
             (when (and (some? (ffi/await (.get ^Db database expired))) (< (System/nanoTime) deadline))
-              (Thread/sleep 20)
+              (px/sleep 20)
               (recur))))
         (is (nil? (ffi/await (.get ^Db database expired))))
         (is (Arrays/equals (utf8 "needed") (ffi/await (.get ^Db database retained))))

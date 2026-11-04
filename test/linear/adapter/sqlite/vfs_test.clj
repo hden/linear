@@ -26,7 +26,7 @@
                  :files {}
                  :callbacks {}
                  :failure nil
-                 :drained (promise)})})
+                 :drained (p/deferred)})})
 
 (deftest decodes-sqlite-open-flags-at-the-vfs-boundary
   (is (= {:path "/test.db"
