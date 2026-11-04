@@ -10,7 +10,8 @@
    [linear.adapter.slatedb.store]
    [linear.usecase.database.model :as model]
    [linear.usecase.database.revisions :as revisions]
-   [linear.usecase.keychain :as keychain])
+   [linear.usecase.keychain :as keychain]
+   [promesa.core :as p])
   (:import
    (java.util Arrays)))
 
@@ -361,12 +362,12 @@
   (let [store (connection/open {:object-store-url "memory:///" :max-open-databases 1})
         keychain (crypto-core/new-keychain)
         database (database-record keychain)
-        start (promise)]
+        start (p/deferred)]
     (try
       (seed! store keychain {:revision-id "r-root" :parent nil :database-page-count 1 :pages {1 (byte-array [0])}})
       (let [writers (mapv (fn [id]
-                            (future
-                              @start
+                            (p/thread
+                              (p/join start)
                               (try
                                 (revisions/publish-next! store
                                   {:database database
@@ -374,8 +375,8 @@
                                 (catch Exception error error))))
                           ["r-next-a" "r-next-b"])]
         (try
-          (deliver start true)
-          (let [results (mapv #(deref % 5000 ::timeout) writers)
+          (p/resolve start true)
+          (let [results (mapv #(p/await % 5000 ::timeout) writers)
                 successes (filter map? results)
                 failures (filter #(instance? Exception %) results)]
             (is (= 1 (count successes)))
@@ -383,8 +384,8 @@
             (revisions/with-consistent-view [view store database]
               (is (= (:revision-id (first successes)) (revisions/revision-id (revisions/head view))))))
           (finally
-            (deliver start true)
+            (p/resolve start true)
             (doseq [writer writers]
-              (deref writer 5000 ::timeout)
-              (future-cancel writer)))))
+              (p/await writer 5000 ::timeout)
+              (p/await writer 15000 ::timeout)))))
       (finally (connection/close store)))))

@@ -2,10 +2,10 @@
   (:require
    [clojure.java.io :as io]
    [clojure.test :refer [deftest is]]
-   [linear.e2e :as e2e])
+   [linear.e2e :as e2e]
+   [promesa.core :as p])
   (:import
-   (java.lang ProcessHandle)
-   (java.util.concurrent TimeUnit)))
+   (java.lang ProcessHandle)))
 
 (defn- client-process [script]
   (.start (ProcessBuilder. ["sh" "-c" script])))
@@ -17,7 +17,7 @@
       (is (not (.isAlive process)))
       (finally
         (.destroyForcibly process)
-        (.waitFor process 5 TimeUnit/SECONDS)))))
+        (p/join (p/promise (.onExit process)) 5000)))))
 
 (deftest client-wait-reports-nonzero-exit
   (let [process (client-process "exit 7")]
@@ -27,7 +27,7 @@
       (is (= 7 (.exitValue process)))
       (finally
         (.destroyForcibly process)
-        (.waitFor process 5 TimeUnit/SECONDS)))))
+        (p/join (p/promise (.onExit process)) 5000)))))
 
 (deftest client-wait-bounds-timeout-and-releases-process
   (let [process (client-process "exec sleep 30")
@@ -39,7 +39,7 @@
       (is (< (/ (- (System/nanoTime) started) 1000000) 5500))
       (finally
         (.destroyForcibly process)
-        (.waitFor process 5 TimeUnit/SECONDS)))))
+        (p/join (p/promise (.onExit process)) 5000)))))
 
 (deftest client-wait-releases-descendants-on-failure
   (doseq [[script timeout-ms message]
@@ -58,4 +58,4 @@
                 (.destroyForcibly child)))))
         (finally
           (.destroyForcibly process)
-          (.waitFor process 5 TimeUnit/SECONDS))))))
+          (p/join (p/promise (.onExit process)) 5000))))))

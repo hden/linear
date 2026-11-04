@@ -13,9 +13,8 @@
    [linear.usecase.keychain :as keychain]
    [linear.usecase.transaction :as transaction]
    [linear.usecase.vault :as vault]
-   [next.jdbc :as jdbc])
-  (:import
-   (java.util.concurrent CountDownLatch TimeUnit)))
+   [next.jdbc :as jdbc]
+   [promesa.core :as p]))
 
 (defn- context [datasource]
   {::core/database       datasource
@@ -159,27 +158,24 @@
           context    (context datasource)
           actor      (str "concurrent-actor-" (random-uuid))
           key        (str "vault-concurrent-" (random-uuid))
-          ready      (CountDownLatch. 2)
-          start      (CountDownLatch. 1)
-          done       (CountDownLatch. 2)
-          calls      (mapv (fn [_]
-                             (future
-                               (.countDown ready)
+          ready-signals (mapv (fn [_] (p/deferred)) (range 2))
+          start      (p/deferred)
+          calls      (mapv (fn [ready]
+                             (p/thread
+                               (p/resolve ready true)
                                (try
-                                 (.await start)
+                                 (p/join start)
                                  {:ids (vault/create! context {:actor actor
                                                                :data [{}]
                                                                :idempotency-key key})}
                                  (catch Exception error
-                                   {:error error})
-                                 (finally
-                                   (.countDown done)))))
-                           (range 2))]
+                                   {:error error}))))
+                           ready-signals)]
       (try
-        (is (.await ready 5 TimeUnit/SECONDS))
-        (.countDown start)
+        (is (= [true true] (p/await (p/all ready-signals) 5000 ::timeout)))
+        (p/resolve start true)
         (let [timeout (Object.)
-              results (mapv #(deref % 10000 timeout) calls)]
+              results (mapv #(p/await % 10000 timeout) calls)]
           (is (not-any? #(identical? timeout %) results))
           (is (every? :ids results)
               (pr-str (map #(some-> % :error ex-data) results)))
@@ -196,10 +192,9 @@
               (is (= [{:subject actor :permission :manage}]
                      (grant/list-grants context {:actor actor :vault-id id}))))))
         (finally
-          (.countDown start)
-          (.await done)
+          (p/resolve start true)
           (doseq [call calls]
-            @call))))))
+            (p/join call)))))))
 
 (deftest ^:integration idempotency-keys-are-scoped-by-actor
   (with-system [sys (run {:keys [:duct.database/sql
@@ -301,23 +296,18 @@
           restore-fn #'vault/restore!
           state-fn #'vault/get-state
           parallel (fn [operations]
-                     (let [start (CountDownLatch. 1)
-                           done (CountDownLatch. (count operations))
+                     (let [start (p/deferred)
                            calls (mapv (fn [operation]
-                                         (future
-                                           (try
-                                             (.await start)
-                                             (operation)
-                                             (finally (.countDown done))))) operations)]
+                                         (p/thread
+                                           (p/join start)
+                                           (operation))) operations)]
                        (try
-                         (.countDown start)
+                         (p/resolve start true)
                          (doseq [call calls]
-                           (is (nil? (deref call 10000 ::timeout))))
+                           (is (nil? (p/await call 10000 ::timeout))))
                          (finally
-                           (.countDown start)
-                           (doseq [call calls]
-                             (when-not (realized? call) (future-cancel call)))
-                           (is (.await done 5 TimeUnit/SECONDS))))))]
+                           (p/resolve start true)
+                           (is (not= ::timeout (p/await (p/wait-all* calls) 5000 ::timeout)))))))]
       (parallel [#(delete-fn ctx args) #(delete-fn ctx args)])
       (is (= :deleted (:state (state-fn ctx args))))
       (is (= [id] (vault/create! ctx {:actor "owner" :data [{}] :idempotency-key creation-key})))

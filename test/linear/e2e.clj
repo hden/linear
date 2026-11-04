@@ -3,7 +3,8 @@
    [clojure.java.io :as io]
    [integrant.core :as integrant]
    [linear.test :as test]
-   [linear.test-data.jwt :as jwt])
+   [linear.test-data.jwt :as jwt]
+   [promesa.core :as p])
   (:import
    (java.lang ProcessHandle)
    (java.util.concurrent TimeUnit TimeoutException)
@@ -31,9 +32,8 @@
     (doseq [^ProcessHandle process processes
             :when (.isAlive process)]
       (try
-        (.get (.onExit process)
-              (max 0 (- deadline (System/nanoTime)))
-              TimeUnit/NANOSECONDS)
+        (p/join (p/promise (.onExit process))
+                (java.time.Duration/ofNanos (max 0 (- deadline (System/nanoTime)))))
         (catch TimeoutException error
           (throw (ex-info "JavaScript Turso sync E2E cleanup timed out after 5000 ms"
                           {:timeout-ms 5000 :pid (.pid process)}
@@ -42,16 +42,18 @@
 (defn- wait-client! [^Process process timeout-ms]
   (let [deadline (+ (System/nanoTime) (.toNanos TimeUnit/MILLISECONDS timeout-ms))
         descendants (volatile! #{})
-        succeeded? (volatile! false)]
+        succeeded? (volatile! false)
+        completion (p/promise (.onExit process))]
     (try
       (loop []
         (with-open [stream (.descendants process)]
           (vswap! descendants into (iterator-seq (.iterator stream))))
         (let [remaining (- deadline (System/nanoTime))]
           (when-not (and (pos? remaining)
-                         (.waitFor process
-                                   (min remaining (.toNanos TimeUnit/MILLISECONDS 50))
-                                   TimeUnit/NANOSECONDS))
+                         (p/await completion
+                                  (java.time.Duration/ofNanos
+                                    (min remaining (.toNanos TimeUnit/MILLISECONDS 50)))
+                                  nil))
             (if (pos? (- deadline (System/nanoTime)))
               (recur)
               (throw (ex-info (str "JavaScript Turso sync E2E timed out after " timeout-ms " ms")

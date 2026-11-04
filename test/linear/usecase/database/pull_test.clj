@@ -12,7 +12,9 @@
    [linear.usecase.database :as database]
    [linear.usecase.database.revisions :as revisions]
    [linear.usecase.transaction :as transaction]
-   [linear.usecase.vault :as vault]))
+   [linear.usecase.vault :as vault]
+   [promesa.core :as p]
+   [promesa.exec :as px]))
 
 (deftest ^:integration pull-traverses-postgres-vault-decryption-and-slatedb
   (with-system [system (run {:keys [:duct.database/sql
@@ -183,32 +185,32 @@
           {:keys [database-id key-protection keychain]}
           (postgres-data/create-database! {:datasource datasource})
           store (connection/open {:object-store-url "memory:///" :max-open-databases 1})
-          entering-wait (promise)
+          entering-wait (p/deferred)
           reader (reify
                    revisions/ConsistentReadable
                    (-read-consistently [_ f database]
                      (revisions/-read-consistently store f database))
                    revisions/RevisionAwaitable
                    (-await-revision [_ args]
-                     (deliver entering-wait true)
+                     (p/resolve entering-wait true)
                      (revisions/-await-revision store args)))
           context {::core/database datasource ::core/key-service key-protection
                    ::core/revision-store reader ::core/max-long-poll-timeout-ms 10000}
           args {:actor "actor-1" :database-id database-id}]
       (try
         (slatedb-data/store-root! {:store store :database-id database-id :keychain keychain :pages {}})
-        (let [poll (future (database/pull context (assoc args :client-revision "r-root" :long-poll-timeout-ms 10000)))]
+        (let [poll (p/thread (database/pull context (assoc args :client-revision "r-root" :long-poll-timeout-ms 10000)))]
           (try
-            (is (= true (deref entering-wait 5000 ::timeout)))
+            (is (= true (p/await entering-wait 5000 ::timeout)))
             ;; Repeat pressure until the real adapter has installed its subscription.
             (loop [attempts 200]
-              (when (and (pos? attempts) (not (realized? poll)))
+              (when (and (pos? attempts) (not (p/done? poll)))
                 (connection/with-database [_ store {:database-id "other"}])
-                (Thread/sleep 10)
+                (px/sleep 10)
                 (recur (dec attempts))))
-            (let [result (deref poll 1000 ::timeout)]
+            (let [result (p/await poll 1000 ::timeout)]
               (is (= "r-root" (:server-revision result)))
               (is (= {} (:pages result))))
-            (finally (future-cancel poll))))
+            (finally (p/await poll 15000 ::timeout))))
         (is (= "r-root" (:server-revision (database/pull context args))))
         (finally (connection/close store))))))
