@@ -60,6 +60,8 @@
     (cond
       (or (non-promesa-vars to) (other-async-namespace? (namespace to)))
       [:non-promesa-async "asynchronous work must use Promesa; convert external APIs at the boundary"]
+      (= to 'clojure.core/locking)
+      [:locking "locking is forbidden; prefer Clojure native data structures and primitives"]
 
       (forbidden-vars to)
       [:global-var-mutation "global Var replacement is forbidden; provide a capability instead"]
@@ -154,6 +156,10 @@
                 (when (or (non-promesa-methods value)
                           (some non-promesa-classes classes))
                   [(finding value :non-promesa-async "raw asynchronous primitives must use Promesa")])))
+            (when (and (api/token-node? node)
+                       (#{'monitor-enter 'monitor-exit
+                          'clojure.core/monitor-enter 'clojure.core/monitor-exit} (api/sexpr node)))
+              [(finding (api/sexpr node) :locking "direct monitor operations are forbidden; prefer Clojure native data structures and primitives")])
             (when (and (api/token-node? node) (root-mutating-methods (api/sexpr node)))
               [(finding (api/sexpr node) :global-var-mutation "direct Var root mutation is forbidden")])
             (when (api/map-node? node)

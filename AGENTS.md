@@ -15,6 +15,7 @@ tips:
 
 do's & dont's:
 
+* Prefer Clojure native data structures and primitives. `locking` and direct monitor operations (`monitor-enter`, `monitor-exit`) are forbidden by `bb lint`; use atoms or refs for coordinated state changes, and Promesa for asynchronous work.
 * Public `defn` APIs use an arg-map or `[target arg-map]`; map destructuring or the name `arg-map` identifies map arguments. Zero/one-argument value operations are allowed.
 * `bb lint` checks each public arity in `src`, `test`, and `scripts`. Positional/variadic exceptions require a qualified var, arity, and reason in `.clj-kondo/config.edn`; do not exempt namespaces.
 * Global Var replacement (`with-redefs`, `with-redefs-fn`, `alter-var-root`, or direct Var root mutation) is forbidden without exceptions. Test through application capabilities or real adapter APIs.
