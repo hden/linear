@@ -19,7 +19,7 @@
 (defmethod spec-for ::evaluator [_]
   [:fn #(satisfies? evaluator/Evaluator %)])
 
-(defn- call-sqlite [invocation context f]
+(defn- call-sqlite [invocation {:keys [context f]}]
   (try
     (let [result (f)]
       (vfs/throw-if-failed! invocation)
@@ -31,37 +31,45 @@
           (fault "SQLite execution failed" context callback-failure)))
       (fault "SQLite execution failed" context error))))
 
-(defn- execute! [invocation database context sql]
-  (call-sqlite invocation context #(connection/execute database sql)))
+(defn- execute! [invocation {:keys [database context sql]}]
+  (call-sqlite invocation {:context context
+                           :f #(connection/execute database sql)}))
 
-(defn- configure! [invocation database]
+(defn- configure! [invocation {:keys [database]}]
   (doseq [sql ["PRAGMA locking_mode=EXCLUSIVE"
                "PRAGMA wal_autocheckpoint=0"
                "PRAGMA temp_store=MEMORY"
                "PRAGMA synchronous=FULL"]]
-    (execute! invocation database {:operation :configure} sql)))
+    (execute! invocation {:database database
+                          :context {:operation :configure}
+                          :sql sql})))
 
-(defn- revision [snapshot delta]
+(defn- revision [snapshot {:keys [delta]}]
   (assoc delta
          :revision-id (str "r-" (ulid))
          :parent (revisions/revision-id snapshot)))
 
-(defn- execute-command! [invocation sqlite-database command]
-  (execute! invocation sqlite-database {:operation :begin} "BEGIN IMMEDIATE")
+(defn- execute-command! [invocation {:keys [sqlite-database command]}]
+  (execute! invocation {:database sqlite-database
+                        :context {:operation :begin}
+                        :sql "BEGIN IMMEDIATE"})
   (let [outcome (try
                   (doseq [[statement-index statement]
                           (map-indexed vector (:statements command))]
-                    (call-sqlite invocation
-                                 {:operation :execute
-                                  :statement-index statement-index}
-                                 #(connection/execute-statement sqlite-database statement)))
-                  (execute! invocation sqlite-database {:operation :commit} "COMMIT")
+                    (call-sqlite invocation {:context {:operation :execute
+                                                       :statement-index statement-index}
+                                             :f #(connection/execute-statement sqlite-database statement)}))
+                  (execute! invocation {:database sqlite-database
+                                        :context {:operation :commit}
+                                        :sql "COMMIT"})
                   {:value nil}
                   (catch Exception error
                     {:error error}))]
     (when-let [error (:error outcome)]
       (try
-        (execute! invocation sqlite-database {:operation :rollback} "ROLLBACK")
+        (execute! invocation {:database sqlite-database
+                              :context {:operation :rollback}
+                              :sql "ROLLBACK"})
         (catch Exception rollback-error
           (.addSuppressed ^Exception error rollback-error)))
       (throw error))))
@@ -82,38 +90,38 @@
 (defn- end-evaluation! [state]
   (signal-if-drained! (swap! state update :active dec)))
 
-(defn- with-snapshot [evaluator snapshot f]
+(defn- call-with-evaluation [evaluator {:keys [snapshot f]}]
   (begin-evaluation! (:state evaluator))
   (try
     (let [path (str "/linear/" (ulid) ".db")
           filesystem (evaluation/evaluation snapshot {:path path})
           invocation (vfs/mount (:resources evaluator) {:path path :filesystem filesystem})]
       (try
-        (let [database (call-sqlite invocation
-                                    {:operation :open :path path}
-                                    #(connection/open {:path path
-                                                       :vfs-name (:name (:resources evaluator))}))]
+        (let [database (call-sqlite invocation {:context {:operation :open :path path}
+                                                :f #(connection/open {:path path
+                                                                      :vfs-name (:name (:resources evaluator))})})]
           (try
-            (configure! invocation database)
-            (f invocation database filesystem)
+            (configure! invocation {:database database})
+            (f {:invocation invocation :database database :filesystem filesystem})
             (finally
-              (call-sqlite invocation {:operation :close} #(connection/close database)))))
+              (call-sqlite invocation {:context {:operation :close}
+                                       :f #(connection/close database)}))))
         (finally
           (vfs/unmount invocation))))
     (finally
       (end-evaluation! (:state evaluator)))))
 
-(defn- read-progress [invocation database client-id]
-  (let [[table-count] (call-sqlite invocation {:operation :read-sync-progress}
-                        #(connection/query-integers database
-                           {:sql "SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = ?"
-                            :parameters ["turso_sync_last_change_id"]}))]
+(defn- read-progress [invocation {:keys [database client-id]}]
+  (let [[table-count] (call-sqlite invocation {:context {:operation :read-sync-progress}
+                                               :f #(connection/query-integers database
+                                                     {:sql "SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = ?"
+                                                      :parameters ["turso_sync_last_change_id"]})})]
     (when (pos? table-count)
       (when-let [[generation change-id]
-                 (call-sqlite invocation {:operation :read-sync-progress}
-                              #(connection/query-integers database
-                                 {:sql "SELECT pull_gen, change_id FROM turso_sync_last_change_id WHERE client_id = ?"
-                                  :parameters [client-id]}))]
+                 (call-sqlite invocation {:context {:operation :read-sync-progress}
+                                          :f #(connection/query-integers database
+                                                {:sql "SELECT pull_gen, change_id FROM turso_sync_last_change_id WHERE client_id = ?"
+                                                 :parameters [client-id]})})]
         {:client-id client-id :generation generation :change-id change-id}))))
 
 (defrecord ^:private Evaluator [resources state shutdown-timeout-ms]
@@ -132,16 +140,18 @@
          (vfs/ok? resources)))
   evaluator/SyncProgressReadable
   (-sync-progress [this {:keys [snapshot client-id]}]
-    (with-snapshot this snapshot
-      (fn [invocation database _]
-        (read-progress invocation database client-id))))
+    (call-with-evaluation this {:snapshot snapshot
+                                :f (fn [{:keys [invocation database]}]
+                                     (read-progress invocation {:database database
+                                                                :client-id client-id}))}))
   evaluator/Evaluator
   (-evaluate [this {:keys [snapshot command]}]
-    (with-snapshot this snapshot
-      (fn [invocation database filesystem]
-        (execute-command! invocation database command)
-        (when-let [delta (evaluation/commit filesystem)]
-          (revision snapshot delta))))))
+    (call-with-evaluation this {:snapshot snapshot
+                                :f (fn [{:keys [invocation database filesystem]}]
+                                     (execute-command! invocation {:sqlite-database database
+                                                                   :command command})
+                                     (when-let [delta (evaluation/commit filesystem)]
+                                       (revision snapshot {:delta delta})))})))
 
 (alter-meta! #'->Evaluator assoc :private true)
 (alter-meta! #'map->Evaluator assoc :private true)
