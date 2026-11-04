@@ -49,9 +49,11 @@
    :url #ig/var oidc-jwks-url}
 
   :linear.server.jetty/allow-encoded-path-separators {}
+  :linear.server.jetty/thread-pool {}
 
   :duct.server.http/jetty
-  {:configurator #ig/ref :linear.server.jetty/allow-encoded-path-separators}
+  {:configurator #ig/ref :linear.server.jetty/allow-encoded-path-separators
+   :thread-pool #ig/ref :linear.server.jetty/thread-pool}
 
   :duct.module/web {:features #{:api}
                     :handler-opts
