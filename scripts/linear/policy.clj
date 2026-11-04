@@ -124,6 +124,14 @@
         (assoc usage :rule :script-test
                :message "tests must exercise application boundaries, not verification scripts")))))
 
+(defn- explicit-interop-method [node]
+  (when (and (api/list-node? node)
+             (= '. (some-> node :children first api/sexpr)))
+    (let [[_ _ member] (api/sexpr node)
+          method-name (if (seq? member) (first member) member)]
+      (when (symbol? method-name)
+        (symbol (str "." method-name))))))
+
 (defn- node-violations [file]
   (let [filename (str file)
         root (try
@@ -133,9 +141,12 @@
     (mapcat
       (fn [node]
         (let [row (max 1 (dec (:row (meta node))))
+              interop-method (explicit-interop-method node)
               finding (fn [value rule message]
                         {:filename filename :row row :from 'source :to value :rule rule :message message})]
           (concat
+            (when (non-promesa-methods interop-method)
+              [(finding interop-method :non-promesa-async "raw asynchronous primitives must use Promesa")])
             (when (api/token-node? node)
               (let [value (api/sexpr node)
                     classes (when (symbol? value)
