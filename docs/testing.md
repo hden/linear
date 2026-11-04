@@ -46,6 +46,10 @@ separate commands.
 Tests that block work must release it and join any asynchronous tasks during
 cleanup, so a failed assertion cannot leave resources or futures blocked.
 
+Promise cancellation does not prove that work has stopped. Interruption tests
+must interrupt the request and verify completion, resource release, and that
+subsequent requests succeed.
+
 See the [CI workflow](../.github/workflows/ci.yml) for automated checks.
 
 ## Real-token E2E
