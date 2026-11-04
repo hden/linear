@@ -26,7 +26,7 @@
                  :files {}
                  :callbacks {}
                  :failure nil
-                 :drained (promise)})})
+                 :drained (p/deferred)})})
 
 (deftest decodes-sqlite-open-flags-at-the-vfs-boundary
   (is (= {:path "/test.db"
@@ -99,9 +99,9 @@
   (let [resources  (resources)
         invocation (vfs/mount resources {:path "/test.db" :filesystem (filesystem)})]
     (vfs/drain! resources)
-    (is (not (realized? (:drained @(:state resources)))))
+    (is (not (p/done? (:drained @(:state resources)))))
     (vfs/unmount invocation)
-    (is (realized? (:drained @(:state resources))))))
+    (is (p/done? (:drained @(:state resources))))))
 
 (deftest draining-rejects-new-invocations
   (let [resources (resources)]

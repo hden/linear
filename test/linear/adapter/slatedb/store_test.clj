@@ -25,12 +25,12 @@
   (revisions/initialize! store {:database (database-record keychain) :revision revision}))
 
 (defn- read-records [store record-keys]
-  (with-open [database    (connection/database store {:database-id "d-1"})
-              transaction (connection/writable-transaction database)]
-    (try
-      (ffi/await (ffi/read-transaction-values transaction record-keys))
-      (finally
-        (ffi/await (ffi/rollback-transaction transaction))))))
+  (connection/with-database [database store {:database-id "d-1"}]
+    (ffi/with-transaction [transaction database]
+      (try
+        (ffi/await (ffi/read-transaction-values transaction record-keys))
+        (finally
+          (ffi/await (ffi/rollback-transaction transaction)))))))
 
 (deftest ^:integration initialization-encrypts-root-and-refuses-to-replace-an-existing-head
   (let [store (connection/open {:object-store-url "memory:///" :max-open-databases 1})
@@ -58,10 +58,10 @@
   (let [store (connection/open {:object-store-url "memory:///" :max-open-databases 1})
         keychain (crypto-core/new-keychain)]
     (try
-      (with-open [database (connection/database store {:database-id "d-1"})
-                  transaction (connection/writable-transaction database)]
-        (ffi/await (ffi/write-values transaction [[(key/head) (codec/encode-head {})]]))
-        (ffi/await (ffi/commit-transaction transaction)))
+      (connection/with-database [database store {:database-id "d-1"}]
+        (ffi/with-transaction [transaction database]
+          (ffi/await (ffi/write-values transaction [[(key/head) (codec/encode-head {})]]))
+          (ffi/await (ffi/commit-transaction transaction))))
       (let [error (try
                     (revisions/initialize! store
                       {:database (database-record keychain)
@@ -74,23 +74,23 @@
         (is (nil? root-value)))
       (finally (connection/close store)))))
 
-(deftest ^:integration failed-consistent-view-acquisition-returns-the-database-lease
+(deftest ^:integration failed-consistent-view-acquisition-releases-its-use
   (let [store    (connection/open {:object-store-url   "memory:///"
                                    :max-open-databases 1})
         keychain (crypto-core/new-keychain)]
     (try
-      (with-open [leased-database (connection/database store {:database-id "d-1"})
-                  transaction     (connection/writable-transaction leased-database)]
-        (ffi/await
-          (ffi/write-values transaction [[(key/head) (byte-array [0])]]))
-        (ffi/await (ffi/commit-transaction transaction)))
+      (connection/with-database [database-handle store {:database-id "d-1"}]
+        (ffi/with-transaction [transaction database-handle]
+          (ffi/await
+            (ffi/write-values transaction [[(key/head) (byte-array [0])]]))
+          (ffi/await (ffi/commit-transaction transaction))))
       (is (thrown? Exception
                    (revisions/with-consistent-view
                      [view store (database-record keychain)]
                      (revisions/head view))))
-      (with-open [leased-database (connection/database store {:database-id "d-1"})
-                  transaction     (connection/writable-transaction leased-database)]
-        (is (some? transaction)))
+      (connection/with-database [database-handle store {:database-id "d-1"}]
+        (ffi/with-transaction [transaction database-handle]
+          (is (some? transaction))))
       (finally
         (connection/close store)))))
 
@@ -212,53 +212,36 @@
       (finally
         (connection/close store)))))
 
-(deftest ^:integration callback-failures-return-the-database-lease
+(deftest ^:integration callback-failures-release-capacity
   (doseq [failure [(ex-info "Callback failed" {}) (AssertionError. "Callback failed")]]
     (let [store (connection/open {:object-store-url "memory:///" :max-open-databases 1})
-          borrowed (atom nil)
-          returned (atom 0)
-          observed-store (assoc store
-                                :borrow-database
-                                (fn [id]
-                                  (let [raw ((:borrow-database store) id)]
-                                    (reset! borrowed raw)
-                                    raw))
-                                :return-database
-                                (fn [id raw]
-                                  (swap! returned inc)
-                                  ((:return-database store) id raw)))
           database (database-record (crypto-core/new-keychain))]
       (try
         (let [caught (try
-                       (revisions/read-consistently observed-store {:f (fn [_] (throw failure)) :database database})
+                       (revisions/with-consistent-view [_ store database] (throw failure))
                        (catch Exception error error)
                        (catch AssertionError error error))]
           (is (identical? failure caught))
-          (is (= 1 @returned))
-          (when (= 1 @returned)
-            (with-open [lease (connection/database store {:database-id "d-1"})]
-              (is (some? lease)))))
-        (finally
-          (when (and @borrowed (zero? @returned))
-            ((:return-database store) "d-1" @borrowed))
-          (connection/close store))))))
+          (connection/with-database [database store {:database-id "d-2"}]
+            (is (ffi/usable-database? database))))
+        (finally (connection/close store))))))
 
 (defn- expire-history! [store revision-ids]
-  (with-open [database (connection/database store {:database-id "d-1"})
-              transaction (connection/writable-transaction database)]
-    (let [[value] (ffi/await (ffi/read-transaction-values transaction [(key/head)]))
-          head (assoc (codec/decode-head value) :history-expires-at 0)]
-      (doseq [revision-id revision-ids]
-        (ffi/await (.delete ^io.slatedb.uniffi.DbTransaction transaction (key/revision revision-id))))
-      (ffi/await (ffi/write-values transaction [[(key/head) (codec/encode-head head)]]))
-      (ffi/await (ffi/commit-transaction transaction)))))
+  (connection/with-database [database store {:database-id "d-1"}]
+    (ffi/with-transaction [transaction database]
+      (let [[value] (ffi/await (ffi/read-transaction-values transaction [(key/head)]))
+            head (assoc (codec/decode-head value) :history-expires-at 0)]
+        (doseq [revision-id revision-ids]
+          (ffi/await (.delete ^io.slatedb.uniffi.DbTransaction transaction (key/revision revision-id))))
+        (ffi/await (ffi/write-values transaction [[(key/head) (codec/encode-head head)]]))
+        (ffi/await (ffi/commit-transaction transaction))))))
 
 (defn- record-expiries [store record-keys]
-  (with-open [database (connection/database store {:database-id "d-1"})]
+  (connection/with-database [database store {:database-id "d-1"}]
     (mapv (fn [record-key]
             (.expireTs ^io.slatedb.uniffi.KeyValue
-              (ffi/await (.getKeyValue ^io.slatedb.uniffi.Db (:raw-database database) record-key))))
-          record-keys)))
+              (ffi/await (.getKeyValue ^io.slatedb.uniffi.Db database record-key))))
+      record-keys)))
 
 (deftest ^:integration history-expires-but-current-data-survives-inactivity-and-remains-writable
   (let [store (connection/open {:object-store-url "memory:///" :max-open-databases 1})
@@ -372,4 +355,36 @@
           (is (= 1 (:database-page-count result)))
           (is (= {1 '(2)} (update-vals (:pages result) seq)))
           (is (thrown? clojure.lang.ExceptionInfo (model/pull database {:server-revision "r-root"})))))
+      (finally (connection/close store)))))
+
+(deftest ^:integration concurrent-publications-preserve-parent-conflicts-and-rollback
+  (let [store (connection/open {:object-store-url "memory:///" :max-open-databases 1})
+        keychain (crypto-core/new-keychain)
+        database (database-record keychain)
+        start (promise)]
+    (try
+      (seed! store keychain {:revision-id "r-root" :parent nil :database-page-count 1 :pages {1 (byte-array [0])}})
+      (let [writers (mapv (fn [id]
+                            (future
+                              @start
+                              (try
+                                (revisions/publish-next! store
+                                  {:database database
+                                   :revision {:revision-id id :parent "r-root" :database-page-count 1 :pages {1 (byte-array [1])}}})
+                                (catch Exception error error))))
+                          ["r-next-a" "r-next-b"])]
+        (try
+          (deliver start true)
+          (let [results (mapv #(deref % 5000 ::timeout) writers)
+                successes (filter map? results)
+                failures (filter #(instance? Exception %) results)]
+            (is (= 1 (count successes)))
+            (is (= [::revisions/revision-conflict] (mapv #(-> % ex-data :reason) failures)))
+            (revisions/with-consistent-view [view store database]
+              (is (= (:revision-id (first successes)) (revisions/revision-id (revisions/head view))))))
+          (finally
+            (deliver start true)
+            (doseq [writer writers]
+              (deref writer 5000 ::timeout)
+              (future-cancel writer)))))
       (finally (connection/close store)))))

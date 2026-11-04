@@ -7,10 +7,7 @@
    [linear.adapter.slatedb.ffi :as ffi]
    [linear.adapter.slatedb.key :as key]
    [linear.adapter.slatedb.snapshot :as snapshot]
-   [linear.usecase.database.revisions :as revisions])
-  (:import
-   (io.slatedb.uniffi DbTransaction)
-   (java.lang AutoCloseable)))
+   [linear.usecase.database.revisions :as revisions]))
 
 (defn- current-state-records [keychain revision head]
   (conj (mapv (fn [[page-id page]]
@@ -63,56 +60,43 @@
 (defn- publish! [store revision database initialize?]
   (let [database-id (:id database)
         keychain    (get-in database [:vault :keychain])]
-    (with-open [^AutoCloseable leased-database
-                (connection/database store {:database-id database-id})
-                ^DbTransaction transaction
-                (connection/writable-transaction leased-database)]
-      (try
-        (let [read-values #(ffi/await
-                             (ffi/read-transaction-values transaction %))
-              head        (if initialize?
-                            (let [[value] (read-values [(key/head)])]
-                              (when value
-                                (throw (revision-conflict "Database HEAD already exists" {} nil)))
-                              nil)
-                            (snapshot/head-metadata read-values))
-              expires-at (max (+ (System/currentTimeMillis)
-                                 (* (:revision-retention-days store) 86400000))
-                              (or (:history-expires-at head) 0))
-              next-head (assoc (select-keys revision [:revision-id :database-page-count])
-                               :history-expires-at expires-at)]
-          (ensure-current-parent! (:revision-id head) revision)
-          (let [record-key (key/revision (:revision-id revision))
-                undo {:parent head
-                      :undo-pages (undo-pages read-values keychain head (vec (keys (:pages revision))))}]
+    (connection/with-database [database-handle store {:database-id database-id}]
+      (ffi/with-transaction [transaction database-handle]
+        (try
+          (let [read-values #(ffi/await
+                               (ffi/read-transaction-values transaction %))
+                head        (if initialize?
+                              (let [[value] (read-values [(key/head)])]
+                                (when value
+                                  (throw (revision-conflict "Database HEAD already exists" {} nil)))
+                                nil)
+                              (snapshot/head-metadata read-values))
+                expires-at (max (+ (System/currentTimeMillis)
+                                   (* (:revision-retention-days store) 86400000))
+                                (or (:history-expires-at head) 0))
+                next-head (assoc (select-keys revision [:revision-id :database-page-count])
+                                 :history-expires-at expires-at)]
+            (ensure-current-parent! (:revision-id head) revision)
+            (let [record-key (key/revision (:revision-id revision))
+                  undo {:parent head
+                        :undo-pages (undo-pages read-values keychain head (vec (keys (:pages revision))))}]
+              (ffi/await
+                (ffi/write-expiring-values transaction
+                                           {:entries [[record-key (codec/encode-revision keychain {:record-key record-key :revision undo})]]
+                                            :expires-at expires-at})))
             (ffi/await
-              (ffi/write-expiring-values transaction
-                                         {:entries [[record-key (codec/encode-revision keychain {:record-key record-key :revision undo})]]
-                                          :expires-at expires-at})))
-          (ffi/await
-            (ffi/write-values transaction
-                              (current-state-records keychain revision next-head)))
-          (ffi/await (ffi/commit-transaction transaction))
-          revision)
-        (catch Exception error
-          (try
-            (ffi/await (ffi/rollback-transaction transaction))
-            (catch Exception rollback-error
-              (add-suppressed! error rollback-error)))
-          (if (commit-conflict? error)
-            (throw (revision-conflict "SlateDB publish conflict" {} error))
-            (throw error)))))))
-
-(defn- with-consistent-view [store database f]
-  (with-open [^AutoCloseable leased-database
-              (connection/database store {:database-id (:id database)})]
-    (let [raw-snapshot (connection/read-only-snapshot leased-database)]
-      (try
-        (let [read-values #(ffi/await (ffi/read-snapshot-values raw-snapshot %))
-              view (snapshot/consistent-view {:read-values read-values :keychain (get-in database [:vault :keychain])})]
-          (f view))
-        (finally
-          (ffi/close-snapshot! raw-snapshot))))))
+              (ffi/write-values transaction
+                                (current-state-records keychain revision next-head)))
+            (ffi/await (ffi/commit-transaction transaction))
+            revision)
+          (catch Exception error
+            (try
+              (ffi/await (ffi/rollback-transaction transaction))
+              (catch Exception rollback-error
+                (add-suppressed! error rollback-error)))
+            (if (commit-conflict? error)
+              (throw (revision-conflict "SlateDB publish conflict" {} error))
+              (throw error))))))))
 
 (extend-type linear.adapter.slatedb.connection.Connection
   revisions/Initializable
@@ -121,7 +105,11 @@
 
   revisions/ConsistentReadable
   (-read-consistently [store f database]
-    (with-consistent-view store database f))
+    (connection/with-database [database-handle store {:database-id (:id database)}]
+      (ffi/with-snapshot [raw-snapshot database-handle]
+        (let [read-values #(ffi/await (ffi/read-snapshot-values raw-snapshot %))
+              view (snapshot/consistent-view {:read-values read-values :keychain (get-in database [:vault :keychain])})]
+          (f view)))))
 
   revisions/RevisionWritable
   (-publish-next! [store revision database]

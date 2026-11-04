@@ -2,7 +2,6 @@
   (:require
    [clojure.java.io :as io]
    [cognitect.anomalies :as anomaly]
-   [diehard.core :refer [with-timeout]]
    [hden.ulid :refer [ulid]]
    [integrant.core :as integrant]
    [linear.adapter.sqlite.connection :as connection]
@@ -12,9 +11,8 @@
    [linear.spec :refer [spec-for]]
    [linear.usecase.database.evaluator :as evaluator]
    [linear.usecase.database.revisions :as revisions]
-   [linear.usecase.healthcheck :as healthcheck])
-  (:import
-   (dev.failsafe TimeoutExceededException)))
+   [linear.usecase.healthcheck :as healthcheck]
+   [promesa.core :as p]))
 
 (def ^:private ^:const default-shutdown-timeout-ms 10000)
 
@@ -79,31 +77,35 @@
 
 (defn- signal-if-drained! [{:keys [status active drained]}]
   (when (and (= :draining status) (zero? active))
-    (deliver drained true)))
+    (p/resolve drained true)))
 
 (defn- end-evaluation! [state]
   (signal-if-drained! (swap! state update :active dec)))
 
-(defn- with-snapshot [evaluator snapshot f]
-  (begin-evaluation! (:state evaluator))
-  (try
-    (let [path (str "/linear/" (ulid) ".db")
-          filesystem (evaluation/evaluation snapshot {:path path})
-          invocation (vfs/mount (:resources evaluator) {:path path :filesystem filesystem})]
-      (try
-        (let [database (call-sqlite invocation
-                                    {:operation :open :path path}
-                                    #(connection/open {:path path
-                                                       :vfs-name (:name (:resources evaluator))}))]
-          (try
-            (configure! invocation database)
-            (f invocation database filesystem)
-            (finally
-              (call-sqlite invocation {:operation :close} #(connection/close database)))))
-        (finally
-          (vfs/unmount invocation))))
-    (finally
-      (end-evaluation! (:state evaluator)))))
+(defmacro ^:private with-evaluation
+  [[binding evaluator options] & body]
+  `(let [evaluator# ~evaluator
+         snapshot# (:snapshot ~options)]
+     (begin-evaluation! (:state evaluator#))
+     (try
+       (let [path# (str "/linear/" (ulid) ".db")
+             filesystem# (evaluation/evaluation snapshot# {:path path#})
+             invocation# (vfs/mount (:resources evaluator#) {:path path# :filesystem filesystem#})]
+         (try
+           (let [database# (call-sqlite invocation#
+                                        {:operation :open :path path#}
+                                        #(connection/open {:path path#
+                                                           :vfs-name (:name (:resources evaluator#))}))]
+             (try
+               (configure! invocation# database#)
+               (let [~binding {:invocation invocation# :database database# :filesystem filesystem#}]
+                 ~@body)
+               (finally
+                 (call-sqlite invocation# {:operation :close} #(connection/close database#)))))
+           (finally
+             (vfs/unmount invocation#))))
+       (finally
+         (end-evaluation! (:state evaluator#))))))
 
 (defn- read-progress [invocation database client-id]
   (let [[table-count] (call-sqlite invocation {:operation :read-sync-progress}
@@ -134,13 +136,13 @@
          (vfs/ok? resources)))
   evaluator/SyncProgressReadable
   (-sync-progress [this {:keys [snapshot client-id]}]
-    (with-snapshot this snapshot
-      (fn [invocation database _]
+    (with-evaluation [evaluation this {:snapshot snapshot}]
+      (let [{:keys [invocation database]} evaluation]
         (read-progress invocation database client-id))))
   evaluator/Evaluator
   (-evaluate [this {:keys [snapshot command]}]
-    (with-snapshot this snapshot
-      (fn [invocation database filesystem]
+    (with-evaluation [evaluation this {:snapshot snapshot}]
+      (let [{:keys [invocation database filesystem]} evaluation]
         (execute-command! invocation database command)
         (when-let [delta (evaluation/commit filesystem)]
           (revision snapshot delta))))))
@@ -156,19 +158,13 @@
                (atom {:status :ready
                       :liveness :ok
                       :active 0
-                      :drained (promise)})
+                      :drained (p/deferred)})
                shutdown-timeout-ms))
 
 (defmethod integrant/halt-key! :linear.adapter.sqlite.evaluator/evaluator
   [_ evaluator]
   (signal-if-drained! (swap! (:state evaluator) assoc :status :draining))
-  (let [drained? (try
-                   (with-timeout {:timeout-ms (:shutdown-timeout-ms evaluator)
-                                  :interrupt? true}
-                     @(:drained @(:state evaluator)))
-                   true
-                   (catch TimeoutExceededException _
-                     false))]
+  (let [drained? (p/await (:drained @(:state evaluator)) (:shutdown-timeout-ms evaluator) false)]
     (if drained?
       (do
         (vfs/drain! (:resources evaluator))

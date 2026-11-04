@@ -2,8 +2,7 @@
   (:refer-clojure :exclude [await])
   (:require
    [cognitect.anomalies :as anomaly]
-   [promesa.core :as p]
-   [promesa.exec :as px])
+   [promesa.core :as p])
   (:import
    (io.slatedb.uniffi CloseReason Db DbBuilder DbSnapshot DbTransaction Error$Closed Error$Data Error$Internal Error$Invalid Error$Transaction Error$Unavailable IsolationLevel ObjectStore PutOptions Ttl$ExpireAtMillis Ttl$NoExpiry WriteHandle)
    (java.util.concurrent CompletionException ExecutionException)))
@@ -54,7 +53,7 @@
 
 (defn await [promise]
   (try
-    (px/await! promise)
+    (p/join promise)
     (catch Exception error
       (throw (unwrap-completion error)))))
 
@@ -93,30 +92,24 @@
   nil)
 
 (defn open-database! [object-store database-id]
-  (with-open [builder (DbBuilder. ^String database-id ^ObjectStore object-store)]
-    (await (invoke :open-database #(.build builder)))))
+  (invoke :open-database
+          (fn []
+            (let [builder (DbBuilder. ^String database-id ^ObjectStore object-store)]
+              (p/finally (invoke :open-database #(.build builder))
+                         (fn [_value _error] (.close builder)))))))
 
 (defn close-database! [database]
-  (let [shutdown-error (try
-                         (await (invoke :shutdown-database #(.shutdown ^Db database)))
-                         nil
-                         (catch Exception error
-                           error))
-        close-error (try
-                      (.close ^Db database)
-                      nil
-                      (catch Exception error
-                        error))]
-    (cond
-      shutdown-error
-      (do
-        (when close-error
-          (.addSuppressed ^Exception shutdown-error ^Exception close-error))
-        (throw shutdown-error))
-
-      close-error
-      (throw close-error)))
-  nil)
+  (p/handle (invoke :shutdown-database #(.shutdown ^Db database))
+            (fn [_value shutdown-error]
+              (let [close-error (try (.close ^Db database) nil
+                                     (catch Exception error error))]
+                (cond
+                  shutdown-error
+                  (do
+                    (when close-error
+                      (.addSuppressed ^Exception shutdown-error ^Exception close-error))
+                    (throw shutdown-error))
+                  close-error (throw close-error))))))
 
 (defn usable-database? [database]
   (try
@@ -168,3 +161,17 @@
     (catch Exception error
       (throw (classify-error error {:operation :close-transaction}))))
   nil)
+
+(defmacro with-snapshot
+  [[binding database] & body]
+  `(let [snapshot# (await (open-snapshot ~database))]
+     (try
+       (let [~binding snapshot#] ~@body)
+       (finally (close-snapshot! snapshot#)))))
+
+(defmacro with-transaction
+  [[binding database] & body]
+  `(let [transaction# (await (begin-transaction ~database))]
+     (try
+       (let [~binding transaction#] ~@body)
+       (finally (close-transaction! transaction#)))))
