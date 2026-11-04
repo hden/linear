@@ -99,9 +99,9 @@
   (let [resources  (resources)
         invocation (vfs/mount resources {:path "/test.db" :filesystem (filesystem)})]
     (vfs/drain! resources)
-    (is (= ::waiting (p/await (:drained @(:state resources)) 10 ::waiting)))
+    (is (not (p/done? (:drained @(:state resources)))))
     (vfs/unmount invocation)
-    (is (= true (p/await (:drained @(:state resources)) 1000 ::timeout)))))
+    (is (p/done? (:drained @(:state resources))))))
 
 (deftest draining-rejects-new-invocations
   (let [resources (resources)]

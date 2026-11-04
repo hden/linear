@@ -51,17 +51,14 @@
 
 (deftest ^:integration reads-and-writes-value-collections
   (let [object-store (ffi/open-object-store "memory:///")
-        database (ffi/open-database! object-store "d-ffi-test")]
+        database (ffi/await (ffi/open-database! object-store "d-ffi-test"))]
     (try
-      (let [transaction (ffi/await (ffi/begin-transaction database))]
-        (try
-          (ffi/await (ffi/write-values transaction
-                                       [[(utf8 "a") (utf8 "one")]
-                                        [(utf8 "b") (utf8 "two")]]))
-          (ffi/await (ffi/commit-transaction transaction))
-          (finally
-            (ffi/close-transaction! transaction))))
-      (let [transaction (ffi/await (ffi/begin-transaction database))]
+      (ffi/with-transaction [transaction database]
+        (ffi/await (ffi/write-values transaction
+                     [[(utf8 "a") (utf8 "one")]
+                      [(utf8 "b") (utf8 "two")]]))
+        (ffi/await (ffi/commit-transaction transaction)))
+      (ffi/with-transaction [transaction database]
         (try
           (let [values (ffi/await (ffi/read-transaction-values
                                     transaction
@@ -73,38 +70,57 @@
             (is (nil? (nth values 1)))
             (is (Arrays/equals (utf8 "one") (nth values 2))))
           (finally
-            (ffi/await (ffi/rollback-transaction transaction))
-            (ffi/close-transaction! transaction))))
+            (ffi/await (ffi/rollback-transaction transaction)))))
       (finally
-        (ffi/close-database! database)
+        (ffi/await (ffi/close-database! database))
         (ffi/close-object-store! object-store)))))
 
 (deftest ^:integration database-snapshot-retains-its-read-view
   (let [object-store (ffi/open-object-store "memory:///")
-        database (ffi/open-database! object-store "d-snapshot-test")]
+        database (ffi/await (ffi/open-database! object-store "d-snapshot-test"))]
     (try
-      (let [transaction (ffi/await (ffi/begin-transaction database))]
-        (try
-          (ffi/await (ffi/write-values transaction [[(utf8 "a") (utf8 "one")]]))
-          (ffi/await (ffi/commit-transaction transaction))
-          (finally
-            (ffi/close-transaction! transaction))))
-      (let [snapshot (ffi/await (ffi/open-snapshot database))]
-        (try
-          (let [transaction (ffi/await (ffi/begin-transaction database))]
-            (try
-              (ffi/await (ffi/write-values transaction [[(utf8 "a") (utf8 "two")]]))
-              (ffi/await (ffi/commit-transaction transaction))
-              (finally
-                (ffi/close-transaction! transaction))))
-          (let [[value] (ffi/await
-                          (ffi/read-snapshot-values snapshot [(utf8 "a")]))]
-            (is (Arrays/equals (utf8 "one") value)))
-          (finally
-            (ffi/close-snapshot! snapshot))))
+      (ffi/with-transaction [transaction database]
+        (ffi/await (ffi/write-values transaction [[(utf8 "a") (utf8 "one")]]))
+        (ffi/await (ffi/commit-transaction transaction)))
+      (ffi/with-snapshot [snapshot database]
+        (ffi/with-transaction [transaction database]
+          (ffi/await (ffi/write-values transaction [[(utf8 "a") (utf8 "two")]]))
+          (ffi/await (ffi/commit-transaction transaction)))
+        (let [[value] (ffi/await
+                        (ffi/read-snapshot-values snapshot [(utf8 "a")]))]
+          (is (Arrays/equals (utf8 "one") value))))
       (finally
-        (ffi/close-database! database)
+        (ffi/await (ffi/close-database! database))
         (ffi/close-object-store! object-store)))))
+
+(deftest ^:integration interruption-exits-change-notifications-scope
+  (with-open [object-store (ffi/open-object-store "memory:///")]
+    (let [database (ffi/await (ffi/open-database! object-store "d-subscription-test"))
+          ready (p/deferred)
+          result (p/deferred)
+          request-thread (p/deferred)]
+      (try
+        (let [waiter (p/thread
+                       (p/resolve request-thread (px/current-thread))
+                       (p/resolve result
+                         (try
+                           (ffi/with-change-notifications [await-change (ffi/subscribe database)]
+                             (p/resolve ready true)
+                             (await-change {:timeout-ms 10000}))
+                           (catch InterruptedException error error))))]
+          (try
+            (is (= true (p/await ready 2000 ::timeout)))
+            (px/interrupt (p/join request-thread))
+            (is (instance? InterruptedException (p/await result 2000 ::timeout)))
+            (finally
+              (is (not= ::timeout (p/await waiter 15000 ::timeout))))))
+        (ffi/with-change-notifications [await-change (ffi/subscribe database)]
+          (ffi/with-transaction [transaction database]
+            (ffi/await (ffi/write-values transaction [[(utf8 "after-interruption") (utf8 "value")]]))
+            (ffi/await (ffi/commit-transaction transaction)))
+          (is (nil? (await-change {:timeout-ms 1000}))))
+        (finally
+          (ffi/await (ffi/close-database! database)))))))
 
 (defn- compaction-settings []
   (with-open [defaults (Settings/_default)]
@@ -129,7 +145,7 @@
           head (utf8 "head")
           page (utf8 "page/1")]
       (try
-        (with-open [transaction (ffi/await (ffi/begin-transaction database))]
+        (ffi/with-transaction [transaction database]
           (ffi/await (ffi/write-values transaction [[head (utf8 "r-current")] [page (utf8 "current")]]))
           (ffi/await (ffi/write-expiring-values transaction {:entries [[expired (utf8 "old")]] :expires-at 0}))
           (ffi/await (ffi/write-expiring-values transaction {:entries [[retained (utf8 "needed")]] :expires-at Long/MAX_VALUE}))
@@ -137,7 +153,7 @@
         (is (nil? (.expireTs (ffi/await (.getKeyValue ^Db database head)))))
         (is (nil? (.expireTs (ffi/await (.getKeyValue ^Db database page)))))
         (doseq [index (range 4)]
-          (with-open [transaction (ffi/await (ffi/begin-transaction database))]
+          (ffi/with-transaction [transaction database]
             (ffi/await (ffi/write-values transaction [[(utf8 (str "padding/" index)) (byte-array 4096)]]))
             (ffi/await (ffi/commit-transaction transaction)))
           (ffi/await (.flushWithOptions ^Db database (FlushOptions. FlushType/MEM_TABLE))))
@@ -150,4 +166,4 @@
         (is (Arrays/equals (utf8 "needed") (ffi/await (.get ^Db database retained))))
         (is (Arrays/equals (utf8 "r-current") (ffi/await (.get ^Db database head))))
         (is (Arrays/equals (utf8 "current") (ffi/await (.get ^Db database page))))
-        (finally (ffi/close-database! database))))))
+        (finally (ffi/await (ffi/close-database! database)))))))

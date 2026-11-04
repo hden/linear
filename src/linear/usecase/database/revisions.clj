@@ -91,6 +91,19 @@
 (defprotocol RevisionWritable
   (-publish-next! [writer revision database]))
 
+(defprotocol RevisionAwaitable
+  (-await-revision [reader arg-map]))
+
+(defn await-revision
+  {:malli/schema [:-> [:fn #(satisfies? RevisionAwaitable %)]
+                  [:map
+                   [:database-id :string]
+                   [:revision-id ::revision-id]
+                   [:timeout-ms pos-int?]]
+                  :nil]}
+  [reader arg-map]
+  (-await-revision reader arg-map))
+
 (defprotocol Initializable
   (-initialize! [writer arg-map]))
 

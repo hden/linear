@@ -191,13 +191,30 @@
                          error))
         (throw error)))))
 
-(defn pull
+(defn- pull-once
   [context {:keys [actor database-id] :as pull-options}]
   (with-database [database context {:database-id database-id
                                     :actor actor
                                     :permission :pull
                                     :read-only true}]
     (model/pull database pull-options)))
+
+(defn pull
+  [context {:keys [database-id client-revision server-revision long-poll-timeout-ms]
+            :or {long-poll-timeout-ms 0}
+            :as pull-options}]
+  (let [result (pull-once context pull-options)]
+    (if (and client-revision (nil? server-revision)
+             (pos? long-poll-timeout-ms)
+             (= client-revision (:server-revision result)))
+      (do
+        (revisions/await-revision (core/revision-awaitable context)
+          {:database-id database-id
+           :revision-id client-revision
+           :timeout-ms (min long-poll-timeout-ms
+                            (core/max-long-poll-timeout-ms context))})
+        (pull-once context pull-options))
+      result)))
 
 (defn sync-progress
   [context {:keys [actor database-id] :as arg-map}]

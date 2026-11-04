@@ -3,7 +3,11 @@
    [integrant.core :as ig])
   (:import
    (org.eclipse.jetty.http UriCompliance UriCompliance$Violation)
-   (org.eclipse.jetty.server Connector HttpConnectionFactory Server)))
+   (org.eclipse.jetty.server Connector HttpConnectionFactory Server)
+   (org.eclipse.jetty.util.thread VirtualThreadPool)))
+
+(defmethod ig/init-key ::thread-pool [_ _]
+  (VirtualThreadPool.))
 
 (defn- allow-encoded-path-separators! [^Server server]
   (let [uri-compliance
