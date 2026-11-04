@@ -15,7 +15,8 @@
    [linear.usecase.grant :as grant]
    [linear.usecase.vault :as vault]
    [next.jdbc :as jdbc]
-   [next.jdbc.result-set :as result-set])
+   [next.jdbc.result-set :as result-set]
+   [promesa.core :as p])
   (:import
    (java.nio.file Files)
    (java.sql DriverManager)
@@ -44,18 +45,18 @@
                    {:builder-fn result-set/as-unqualified-maps}))))
 
 (defn- concurrent-results [operations]
-  (let [start (promise)
+  (let [start (p/deferred)
         tasks (mapv (fn [operation]
-                      (future @start
-                              (try (operation)
-                                   (catch clojure.lang.ExceptionInfo error error))))
+                      (p/thread (p/join start)
+                        (try (operation)
+                             (catch clojure.lang.ExceptionInfo error error))))
                     operations)]
     (try
-      (deliver start true)
-      (mapv #(deref % 10000 ::timeout) tasks)
+      (p/resolve start true)
+      (mapv #(p/await % 10000 ::timeout) tasks)
       (finally
-        (deliver start true)
-        (doseq [task tasks] (is (not= ::timeout (deref task 10000 ::timeout))))))))
+        (p/resolve start true)
+        (doseq [task tasks] (is (not= ::timeout (p/await task 10000 ::timeout))))))))
 
 (deftest ^:integration concurrent-creation-and-closure-produce-one-identity-and-tombstone
   (with-system [system (run {:keys components})]

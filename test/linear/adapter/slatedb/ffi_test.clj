@@ -4,7 +4,8 @@
    [clojure.test :refer [deftest is testing]]
    [cognitect.anomalies :as anomaly]
    [linear.adapter.slatedb.ffi :as ffi]
-   [promesa.core :as p])
+   [promesa.core :as p]
+   [promesa.exec :as px])
   (:import
    (io.slatedb.uniffi CloseReason Db DbBuilder Error$Closed Error$Data Error$Internal Error$Invalid Error$Transaction Error$Unavailable FlushOptions FlushType Settings)
    (java.nio.charset StandardCharsets)
@@ -95,23 +96,29 @@
 (deftest ^:integration interruption-exits-change-notifications-scope
   (with-open [object-store (ffi/open-object-store "memory:///")]
     (let [database (ffi/await (ffi/open-database! object-store "d-subscription-test"))
-          ready (promise)
-          result (promise)]
+          ready (p/deferred)
+          result (p/deferred)
+          request-thread (p/deferred)]
       (try
-        (let [waiter (future
-                       (deliver result
-                                (try
-                                  (ffi/with-change-notifications [await-change (ffi/subscribe database)]
-                                    (deliver ready true)
-                                    (await-change {:timeout-ms 10000}))
-                                  (catch InterruptedException error error))))]
+        (let [waiter (p/thread
+                       (p/resolve request-thread (px/current-thread))
+                       (p/resolve result
+                         (try
+                           (ffi/with-change-notifications [await-change (ffi/subscribe database)]
+                             (p/resolve ready true)
+                             (await-change {:timeout-ms 10000}))
+                           (catch InterruptedException error error))))]
           (try
-            (is (= true (deref ready 2000 ::timeout)))
-            (future-cancel waiter)
-            (is (instance? InterruptedException (deref result 2000 ::timeout)))
+            (is (= true (p/await ready 2000 ::timeout)))
+            (px/interrupt (p/join request-thread))
+            (is (instance? InterruptedException (p/await result 2000 ::timeout)))
             (finally
-              (future-cancel waiter)
-              (deref result 2000 ::timeout))))
+              (is (not= ::timeout (p/await waiter 15000 ::timeout))))))
+        (ffi/with-change-notifications [await-change (ffi/subscribe database)]
+          (ffi/with-transaction [transaction database]
+            (ffi/await (ffi/write-values transaction [[(utf8 "after-interruption") (utf8 "value")]]))
+            (ffi/await (ffi/commit-transaction transaction)))
+          (is (nil? (await-change {:timeout-ms 1000}))))
         (finally
           (ffi/await (ffi/close-database! database)))))))
 
@@ -153,7 +160,7 @@
         (let [deadline (+ (System/nanoTime) 10000000000)]
           (loop []
             (when (and (some? (ffi/await (.get ^Db database expired))) (< (System/nanoTime) deadline))
-              (Thread/sleep 20)
+              (px/sleep 20)
               (recur))))
         (is (nil? (ffi/await (.get ^Db database expired))))
         (is (Arrays/equals (utf8 "needed") (ffi/await (.get ^Db database retained))))
