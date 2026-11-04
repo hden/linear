@@ -16,10 +16,6 @@ E2E scenarios, run by [CI](../.github/workflows/ci.yml) on Linux x64.
 | Query partial sync | Unsupported |
 | MVCC and experimental remote writes | Outside the verified compatibility scope |
 
-Long polls release the database lease before waiting and recheck data and access
-after waking. In Linear, capacity eviction can wake a poll before its timeout
-and return an empty response. This is Linear behavior, not a Turso guarantee.
-
 ## Limitations
 
 - Verification covers JS SDK 0.8.3 on Linux x64; other versions, language bindings,
