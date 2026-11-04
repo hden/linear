@@ -1,22 +1,36 @@
 (ns linear.adapter.slatedb.connection
   (:require
-   [linear.adapter.slatedb.ffi :as ffi])
+   [linear.adapter.slatedb.ffi :as ffi]
+   [promesa.core :as p]
+   [promesa.exec :as px])
   (:import
-   (java.util.concurrent CompletableFuture)
    (org.apache.commons.pool2 BaseKeyedPooledObjectFactory PooledObject)
    (org.apache.commons.pool2.impl DefaultPooledObject GenericKeyedObjectPool GenericKeyedObjectPoolConfig)))
 
 (defrecord Connection [pool object-store revision-retention-days])
 
+(defn- await-lifecycle [completion]
+  (let [interrupted? (volatile! false)]
+    (try
+      ;; Observe interruption only after lifecycle ownership is settled.
+      (loop []
+        (let [[completed? value] (try
+                                   [true (p/join completion)]
+                                   (catch InterruptedException _
+                                     (vreset! interrupted? true)
+                                     [false nil]))]
+          (if completed? value (recur))))
+      (finally
+        (when @interrupted? (px/interrupt))))))
+
 (defn- destroy-database [pooled-database]
-  (.join ^CompletableFuture
+  (await-lifecycle
     (ffi/close-database! (.getObject ^PooledObject pooled-database))))
 
 (defn- database-pool-factory [object-store]
   (proxy [BaseKeyedPooledObjectFactory] []
     (create [database-id]
-      ;; Lifecycle ownership must be established before observing interruption.
-      (.join ^CompletableFuture (ffi/open-database! object-store database-id)))
+      (await-lifecycle (ffi/open-database! object-store database-id)))
     (wrap [database]
       (DefaultPooledObject. database))
     (validateObject [_ pooled-database]
@@ -47,7 +61,7 @@
 (defn ^:no-doc call-with-database [{:keys [pool]} {:keys [database-id f]}]
   (let [database (.borrowObject ^GenericKeyedObjectPool pool database-id)]
     (try
-      (when (.isInterrupted (Thread/currentThread))
+      (when (px/interrupted? :current)
         (throw (InterruptedException.)))
       (f database)
       (finally
