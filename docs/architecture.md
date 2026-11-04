@@ -250,7 +250,12 @@ Policy checks inspect `src`, `test`, `scripts`, and `.clj-kondo/hooks` with fixe
 analysis settings. Prefer Clojure native data structures and primitives:
 `locking` and direct monitor operations (`monitor-enter`, `monitor-exit`) are
 forbidden. Use atoms or refs for coordinated state changes and Promesa for
-asynchronous work. Global Var replacement has no exceptions. Dynamic code and
+asynchronous work. Convert external asynchronous APIs at the boundary. Standard
+futures, promises, agents, other asynchronous libraries, and raw Future
+operations are forbidden in `src`, `test`, and `scripts`. Synchronous callbacks,
+FFI function pointers, Jetty execution infrastructure, and JavaScript SDK code
+are outside this replacement scope; review callback semantics explicitly.
+Global Var replacement has no exceptions. Dynamic code and
 name resolution require an exact calling var, target, and reason in the checker;
 there are currently no approved dynamic references. Namespace-wide exemptions
 and inline lint suppression are forbidden. Missing sources, parse failures,
