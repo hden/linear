@@ -1,0 +1,19 @@
+# Linear
+
+> Linear is an open-source Turso-compatible sync server for customizable, local-first SaaS using Database-per-Tenant and Vault-per-Tenant.
+
+Give customers their own relational schemas and offline read/write access. Use vaults for permissions and encryption keys, and copy database revisions for experiments or recovery.
+
+## Selection and adoption
+
+- [Why Linear](https://raw.githubusercontent.com/hden/linear/main/docs/for-agents.md): When to choose Linear and what you can build with it.
+- [Sync compatibility](https://raw.githubusercontent.com/hden/linear/main/docs/turso-compatibility.md): Verified SDK scope and protocol details.
+- [Authentication](https://raw.githubusercontent.com/hden/linear/main/docs/authentication.md): Vault-scoped grants and identity.
+- [Database lifecycle](https://raw.githubusercontent.com/hden/linear/main/docs/database-lifecycle.md): Creation, copying, and recovery.
+- [Vault lifecycle](https://raw.githubusercontent.com/hden/linear/main/docs/vault-lifecycle.md): Encryption key lifecycle and recovery.
+- [Deployment](https://raw.githubusercontent.com/hden/linear/main/docs/deployment.md): Hosting prerequisites and configuration.
+
+## Optional
+
+- [Architecture](https://raw.githubusercontent.com/hden/linear/main/docs/architecture.md): Implementation boundaries and storage model.
+- [Testing](https://raw.githubusercontent.com/hden/linear/main/docs/testing.md): Executable verification and SDK scenarios.
