@@ -27,11 +27,16 @@ identity and root revision, reencrypted for the target vault. Both vault keys
 must be available. Timestamp selection is not supported.
 
 Rename preserves attribute history without changing HEAD. Closure is irreversible
-and retains attributes and encrypted revisions for recovery. New sync operations
+and retains attributes and encrypted data for recovery. New sync operations
 are rejected; already-resolved operations may finish. Metadata operations remain
 available when vault keys are deleted; creation and recovery return 409.
 
 Errors: 400 invalid input/filter, 403 permission denied, 404 missing resource/revision,
-409 closed-state, deleted-key, or idempotency conflict. Initialization precedes
-PostgreSQL commit; rollback can leave unreferenced initial storage. Physical deletion
-and garbage collection are not provided.
+409 closed-state, deleted-key, or idempotency conflict.
+
+## Revision retention and storage cleanup
+
+Current data is retained. SlateDB compacts expired revision history and
+[collects obsolete storage files](https://slatedb.io/docs/design/gc/).
+See [retention configuration](../duct.edn) and
+[orphan database cleanup tracking](https://github.com/hden/linear/issues/25).
