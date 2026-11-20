@@ -36,7 +36,7 @@ Errors: 400 invalid input/filter, 403 permission denied, 404 missing resource/re
 
 ## Revision retention and storage cleanup
 
-Current data is retained. SlateDB compacts expired revision history and
+SlateDB compacts expired revision history and
 [collects obsolete storage files](https://slatedb.io/docs/design/gc/).
 See [retention configuration](../duct.edn) and
 [orphan database cleanup tracking](https://github.com/hden/linear/issues/25).
