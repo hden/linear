@@ -36,7 +36,7 @@ jobs:
         with:
           context: .
           load: true
-          tags: linear-ci-app
+          tags: ${{ env.COMPOSE_PROJECT_NAME }}-app
           cache-from: type=gha,scope=ci-app-linux-amd64
       - name: Start PostgreSQL
         run: docker compose up --detach --wait postgres
@@ -81,8 +81,6 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          load: true
-          tags: linear-ci-app
           cache-to: type=gha,scope=ci-app-linux-amd64,mode=max
       - name: Save npm downloads from successful main builds
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.npm-cache.outputs.cache-hit != 'true'
